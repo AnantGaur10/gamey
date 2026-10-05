@@ -245,4 +245,23 @@ test.describe('Gamey - Combat', () => {
     await page.waitForTimeout(1500);
     expect(errors).toEqual([]);
   }, { timeout: 60000 });
+
+  test('hell round always resolves once both bullets are spent (no soft lock)', async ({ page }) => {
+    // Repro (user 2026-10-05): player misses, the foe's single bullet hits
+    // NON-lethally -> both guns empty, nothing alive, round never ended.
+    type S = { roundOver: boolean; hell: boolean; ammo: number; foeAmmo: number; live: number };
+    const state = () => page.evaluate(() => (window as unknown as { __gamey: { state(): S } }).__gamey.state());
+    await startStandard(page);
+    await page.evaluate(() => (window as unknown as { __gamey: { hell(): void } }).__gamey.hell());
+    await page.waitForSelector('.readyzone', { timeout: 8000 });
+    expect((await state()).hell).toBe(true);
+    await parkInHolster(page);
+    await waitDraw(page);
+    await page.mouse.click(30, 30); // fire the one bullet into the sky
+    await page.waitForFunction(() => {
+      const s = (window as unknown as { __gamey: { state(): S } }).__gamey.state();
+      return s.roundOver;
+    }, undefined, { timeout: 12000 });
+    expect((await state()).roundOver).toBe(true);
+  }, { timeout: 60000 });
 });

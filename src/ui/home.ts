@@ -498,16 +498,16 @@ function runDuel(
       GLB + procedural rigs. (Blender NLA clips proved un drivable in this
       setup — all mixer bindings resolve null — so joints are code-owned like
       armR/elbowR. The authored actions remain in the GLBs, inert.)
-      Signs: waist follows group-pitch convention (+ tips top toward foe);
-      thigh/knee signs tuned visually (hanging limbs swing opposite). */
-  const WOUND_JOINTS: Record<WoundPose, { thigh: number; knee: number; waist: number }> = {
-    none: { thigh: 0, knee: 0, waist: 0 },
-    bend: { thigh: 0, knee: 0.4, waist: 0 },
-    // Hip flexion (thigh) + knee fold put the shin on the ground = kneel. The
-    // leg mesh pivots mid-thigh (Leg origin z 0.52), so the hips sink via the
-    // group drop, not the thigh swing.
-    crouch: { thigh: -1.07, knee: 1.69, waist: 0 },
-    prone: { thigh: 0.4, knee: 1, waist: 0.05 },
+      All angles are rotation.x in the group-pitch convention (+ tips the
+      top toward the foe, so a hanging limb's lower end swings AWAY): thigh
+      < 0 = knee forward, knee > 0 = shin folds back, head > 0 = chin down.
+      Legs are per side (L = front leg of the lunge, R = gun side). */
+  type JointPose = { thighL: number; thighR: number; kneeL: number; kneeR: number; waist: number; head: number; armL: number; hipYaw: number };
+  const WOUND_JOINTS: Record<WoundPose, JointPose> = {
+    none: { thighL: 0, thighR: 0, kneeL: 0, kneeR: 0, waist: 0, head: 0, armL: 0, hipYaw: 0 },
+    bend: { thighL: 0, thighR: 0, kneeL: -0.4, kneeR: -0.4, waist: 0, head: 0, armL: 0, hipYaw: 0 }, // = the GLB-tuned +0.4 before rig signs
+    crouch: { thighL: 0, thighR: 0, kneeL: 0, kneeR: 0, waist: 0, head: 0, armL: 0, hipYaw: 0 },
+    prone: { thighL: 0, thighR: 0, kneeL: 0, kneeR: 0, waist: 0, head: 0, armL: 0, hipYaw: 0 },
   };
 
   /** Gun-arm stabilizer. Wound poses pitch AND roll the whole body (group),
@@ -524,6 +524,12 @@ function runDuel(
       yaw), identity when upright. Dead/corpse duelists keep their last mount
       (the ragdoll owns the arm). */
   const armMounts = new WeakMap<Cowboy, THREE.Group>();
+  /** Shoulder in the torso's frame, captured upright on mount creation. The
+      GLB armR hangs off the model root (not the waist), so a waist lean would
+      leave the arm floating; the mount position follows the torso instead
+      (a no-op on the procedural rig, whose arm already rides the waist). */
+  const shoulderInTorso = new WeakMap<Cowboy, THREE.Vector3>();
+  const _vS = new THREE.Vector3();
   const _qP = new THREE.Quaternion();
   const _qPi = new THREE.Quaternion();
   const _qG = new THREE.Quaternion();
@@ -541,6 +547,18 @@ function runDuel(
       c.armR.position.set(0, 0, 0);
       m.add(c.armR);
       armMounts.set(c, m);
+      const torso = c.parts.torso;
+      if (torso) {
+        m.updateWorldMatrix(true, false);
+        torso.updateWorldMatrix(true, false);
+        shoulderInTorso.set(c, torso.worldToLocal(m.getWorldPosition(new THREE.Vector3())));
+      }
+    }
+    const sT = shoulderInTorso.get(c), torso = c.parts.torso;
+    if (sT && torso) {
+      torso.updateWorldMatrix(true, false);
+      m.parent!.updateWorldMatrix(true, false);
+      m.position.copy(m.parent!.worldToLocal(torso.localToWorld(_vS.copy(sT))));
     }
     m.parent!.getWorldQuaternion(_qP);
     c.group.getWorldQuaternion(_qG);
@@ -553,19 +571,63 @@ function runDuel(
       direction unchanged) once the body is near horizontal; 0 when upright. */
   const armLift = (c: Cowboy): number => Math.min(0.9, Math.max(0, (c.group.rotation.x - 0.9) * 1.5));
 
+  /** Rest rotation + position of each driven node, captured on a cowboy's
+      first drive (the head and cuff are not authored at 0). */
+  const jointRest = new WeakMap<Cowboy, Map<THREE.Object3D, { x: number; y: number; p: THREE.Vector3 }>>();
+  const _vU = new THREE.Vector3();
+  function restOf(c: Cowboy, o: THREE.Object3D): { x: number; y: number; p: THREE.Vector3 } {
+    let m = jointRest.get(c);
+    if (!m) jointRest.set(c, (m = new Map()));
+    let r = m.get(o);
+    if (!r) m.set(o, (r = { x: o.rotation.x, y: o.rotation.y, p: o.position.clone() }));
+    return r;
+  }
+  /** Chase o.rotation.x to rest + target (rig sign applied). With `pivot`
+      (parent frame) the node also orbits it, so it swings about that point
+      instead of its own origin: p = rest + u - R(a)u, u = pivot - rest. */
+  function setJoint(c: Cowboy, o: THREE.Object3D | null, target: number, k: number, pivot?: THREE.Vector3): void {
+    if (!o) return;
+    const r = restOf(c, o);
+    o.rotation.x += (r.x + target * (c.joints?.sign ?? 1) - o.rotation.x) * k;
+    if (!pivot) return;
+    const a = o.rotation.x - r.x, u = _vU.copy(pivot).sub(r.p);
+    const cs = Math.cos(a), sn = Math.sin(a);
+    o.position.set(r.p.x, r.p.y + u.y - (u.y * cs - u.z * sn), r.p.z + u.z - (u.y * sn + u.z * cs));
+  }
+  function setYaw(c: Cowboy, o: THREE.Object3D | null, target: number, k: number): void {
+    if (!o) return;
+    const r = restOf(c, o);
+    o.rotation.y += (r.y + target - o.rotation.y) * k;
+  }
+
   /** Damped joint chase. Skipped for corpses/dead like the group pose.
       Null-safe: rigs predating the joints keep the group-tilt fallback. */
   function driveJoints(c: Cowboy, wound: WoundPose, hp: number, doll: Ragdoll | null, dt: number): void {
     if (hp <= 0 || doll?.fallen) return;
-    const t = WOUND_JOINTS[wound];
-    const k = 1 - Math.exp(-dt * 6);
+    if (!c.joints) return;
+    applyJoints(c, WOUND_JOINTS[wound], 1 - Math.exp(-dt * 6));
+  }
+  const _vHip = new THREE.Vector3();
+  function applyJoints(c: Cowboy, t: JointPose, k: number): void {
     const J = c.joints;
-    if (!J) return;
-    if (J.thighL) J.thighL.rotation.x += (t.thigh - J.thighL.rotation.x) * k;
-    if (J.thighR) J.thighR.rotation.x += (t.thigh - J.thighR.rotation.x) * k;
-    if (J.kneeL) J.kneeL.rotation.x += (t.knee - J.kneeL.rotation.x) * k;
-    if (J.kneeR) J.kneeR.rotation.x += (t.knee - J.kneeR.rotation.x) * k;
-    if (J.waist) J.waist.rotation.x += (t.waist - J.waist.rotation.x) * k;
+    for (const [o, v] of [[J.thighL, t.thighL], [J.thighR, t.thighR]] as const) {
+      if (!o) continue;
+      // Hip = hipLift above the thigh's REST pivot (GLB legs pivot mid-thigh).
+      const p = restOf(c, o).p;
+      setJoint(c, o, v, k, J.hipLift ? _vHip.set(p.x, p.y + J.hipLift, p.z) : undefined);
+    }
+    setJoint(c, J.kneeL, t.kneeL, k);
+    setJoint(c, J.kneeR, t.kneeR, k);
+    setJoint(c, J.waist, t.waist, k);
+    setJoint(c, J.head ?? null, t.head, k);
+    if (J.armL) for (const o of J.armL.nodes) setJoint(c, o, t.armL, k, J.armL.pivot);
+    // Hip turn: legs yaw with the pelvis, the waist yaws back (YXZ: yaw
+    // applied outside the lean) so the torso, head and lean still face the foe.
+    if (J.hips && J.waist) {
+      J.waist.rotation.order = "YXZ";
+      setYaw(c, J.hips, t.hipYaw, k);
+      setYaw(c, J.waist, -t.hipYaw, k);
+    }
   }
 
   // DEV-only probe for the wound test suite (zero prod surface).
@@ -574,6 +636,9 @@ function runDuel(
       wounds: () => ({ player: playerWound, playerHits: playerWounds, foe: foeWound, foeHits: foeWounds }),
       capsule: (side: "player" | "foe") => CAPSULE_FOR_POSE[side === "player" ? playerWound : foeWound],
       roll: (n: number) => machine.rollWound(n),
+      /** Jump straight into a hell sudden-death round (repro/tests). */
+      hell: () => { cleanup(); runDuel(root, adapter, mode, audio, series, true, reviveUsed, { run }); },
+      state: () => ({ phase: machine.phase, roundOver, playerHP, foeHP, ammo, foeAmmo, hell: hellRound, live: sim.bullets.filter((b) => b.alive).length }),
       /** Focus QTE readout: needle as rendered right now + zone + tallies. */
       qte: () => ({
         needle: qte.peek(qteExtra()),
@@ -606,7 +671,8 @@ function runDuel(
           group: +c.group.rotation.x.toFixed(3),
           drop: +c.group.position.y.toFixed(3),
           thighL: r(J?.thighL ?? null), kneeL: r(J?.kneeL ?? null),
-          waist: r(J?.waist ?? null),
+          thighR: r(J?.thighR ?? null), kneeR: r(J?.kneeR ?? null),
+          waist: r(J?.waist ?? null), head: r(J?.head ?? null),
         };
       },
       /** World positions of a duelist's ragdoll parts (corpse-coherence
@@ -644,17 +710,11 @@ function runDuel(
       /** Set a wound pose INSTANTLY (no chase) and measure it: head/pelvis/
           torso world Y, lowest point (feet planted => ~0) and foot reach
           ahead of the pelvis. Lets tuning sweep many poses in one tick. */
-      poseProbe: (side: "player" | "foe", p: { pitch: number; roll: number; drop: number; thigh: number; knee: number; waist: number }) => {
+      poseProbe: (side: "player" | "foe", p: { pitch: number; roll: number; drop: number } & Partial<JointPose>) => {
         const c = side === "player" ? player : foe;
         c.group.rotation.x = p.pitch; c.group.rotation.z = p.roll; c.group.position.y = p.drop;
-        const J = c.joints;
-        if (J) {
-          if (J.thighL) J.thighL.rotation.x = p.thigh;
-          if (J.thighR) J.thighR.rotation.x = p.thigh;
-          if (J.kneeL) J.kneeL.rotation.x = p.knee;
-          if (J.kneeR) J.kneeR.rotation.x = p.knee;
-          if (J.waist) J.waist.rotation.x = p.waist;
-        }
+        if (c.joints) applyJoints(c, { ...WOUND_JOINTS.none, ...p }, 1);
+        stabilizeArm(c, 1, null);
         c.group.updateMatrixWorld(true);
         const y = (o: THREE.Object3D | null) => (o ? new THREE.Vector3().setFromMatrixPosition(o.matrixWorld) : null);
         const head = y(c.parts.head), pelvis = y(c.parts.pelvis), torso = y(c.parts.torso);
@@ -704,14 +764,12 @@ function runDuel(
         return [g.x, g.y, g.z];
       },
       /** Live-edit a pose's tables (visual iteration without a rebuild). */
-      setPose: (pose: WoundPose, v: Partial<{ pitch: number; roll: number; drop: number; thigh: number; knee: number; waist: number }>) => {
+      setPose: (pose: WoundPose, v: Partial<{ pitch: number; roll: number; drop: number } & JointPose>) => {
         const t = WOUND_POSE_TARGET[pose], j = WOUND_JOINTS[pose];
         if (v.pitch !== undefined) t.pitch = v.pitch;
         if (v.roll !== undefined) t.roll = v.roll;
         if (v.drop !== undefined) t.drop = v.drop;
-        if (v.thigh !== undefined) j.thigh = v.thigh;
-        if (v.knee !== undefined) j.knee = v.knee;
-        if (v.waist !== undefined) j.waist = v.waist;
+        for (const k of Object.keys(j) as (keyof JointPose)[]) if (v[k] !== undefined) j[k] = v[k]!;
       },
       /** Profile camera on the foe (flexion is foreshortened on the OTS
           cam, so pose tuning needs a side view). `false` restores. */
@@ -933,8 +991,9 @@ function runDuel(
     machine.startFocus();
     cue.textContent = "FOCUS! 3.0s";
     sub.textContent = coarse ? "Tap when the marker is on the gold arc" : "SPACE / ENTER when the marker is on the gold arc · don't click";
-    // The ring on the foe shows the crosshair during Focus; the pointer
-    // crosshair (still sized every frame) appears at DRAW.
+    // The ring on the foe shows the bloom during Focus; the pointer keeps a
+    // small fixed cross (OS cursor is hidden in-duel) and gets its bloom
+    // ring back at DRAW.
     cross.style.display = "block";
     cross.classList.add("focusing");
     adapter.gameplayStart();
@@ -1159,8 +1218,12 @@ function runDuel(
     if (!anyLive && ammo <= 0 && (foeAmmo <= 0 || mode === "tutorial")) {
       roundOver = true;
       if (hellRound) {
-        // Hell loops on both-miss until someone hits (locked).
-        endRound("BOTH MISS — AGAIN!", "Hell wants blood. 1 bullet each.", "draw", false);
+        // Hell loops on both-miss until someone hits (locked). Sudden death:
+        // a non-lethal body hit still takes it (this used to replay as
+        // "BOTH MISS" — and before that never resolved at all).
+        if (playerHP === foeHP) endRound("BOTH MISS — AGAIN!", "Hell wants blood. 1 bullet each.", "draw", false);
+        else if (playerHP > foeHP) endRound("YOU DREW BLOOD — HELL IS YOURS", "Sudden death: first hit wins.", "p");
+        else endRound("THE FOE DREW BLOOD", "Sudden death: first hit wins.", "f");
         return;
       }
       if (playerHP === foeHP) endRound("DRAW — REPLAY", "Same HP.", "draw", false);
@@ -1780,6 +1843,11 @@ function runDuel(
       else if (machine.phase === "fire") machine.recover(STEP, gun.recoilRecoveryDegPerSec);
       stepBullets();
       bulletImpacts();
+      // Ammo-out re-check once the last bullet lands. maybeEnd only ran on
+      // kills and on the player's last shot, so when the foe fired last
+      // (always in hell: 1 bullet each) and hit non-lethally or missed,
+      // the round never resolved (soft lock, user report 2026-10-05).
+      if (!roundOver && ammo <= 0 && (foeAmmo <= 0 || mode === "tutorial") && !sim.bullets.some((b) => b.alive)) maybeEnd();
       // Corpse physics lives on the same fixed clock (null-safe).
       try { if (foeDoll?.fallen) foeDoll.fixedStep(STEP); } catch { /* fallback already fell */ }
       try { if (playerDoll?.fallen) playerDoll.fixedStep(STEP); } catch { /* noop */ }

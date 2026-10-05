@@ -170,10 +170,10 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
   position: absolute; background: rgba(255, 244, 214, 0.95);
   box-shadow: 0 0 4px rgba(0, 0, 0, 0.9);
 }
-.crosshair .chl.t { left: -1.5px; bottom: var(--gap); width: 3px; height: 11px; }
-.crosshair .chl.b { left: -1.5px; top: var(--gap); width: 3px; height: 11px; }
-.crosshair .chl.l { top: -1.5px; right: var(--gap); height: 3px; width: 11px; }
-.crosshair .chl.r { top: -1.5px; left: var(--gap); height: 3px; width: 11px; }
+.crosshair .chl.t { left: -1.5px; bottom: var(--lgap, var(--gap)); width: 3px; height: 11px; }
+.crosshair .chl.b { left: -1.5px; top: var(--lgap, var(--gap)); width: 3px; height: 11px; }
+.crosshair .chl.l { top: -1.5px; right: var(--lgap, var(--gap)); height: 3px; width: 11px; }
+.crosshair .chl.r { top: -1.5px; left: var(--lgap, var(--gap)); height: 3px; width: 11px; }
 .crosshair .cdot {
   position: absolute; left: -2px; top: -2px; width: 4px; height: 4px; border-radius: 50%;
   background: rgba(255, 244, 214, 0.95);
@@ -186,7 +186,13 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
   border: 2px solid rgba(255, 244, 214, 0.8); border-radius: 50%;
   box-shadow: 0 0 3px rgba(0, 0, 0, 0.8), inset 0 0 3px rgba(0, 0, 0, 0.6);
 }
-.crosshair.focusing { visibility: hidden; }
+/* Focus: the ring on the foe shows the bloom, but the OS cursor is hidden
+   in-duel, so the pointer still needs a mark (where am I vs the holster):
+   a small fixed-size cross, no ring. --gap keeps tracking the bloom. */
+.crosshair.focusing { --lgap: 5px; }
+.crosshair.focusing .cring { display: none; }
+.crosshair.focusing .chl, .crosshair.focusing .cdot { background: #fff; box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.95), 0 0 6px rgba(0, 0, 0, 0.8); }
+.crosshair.focusing .cdot { left: -3px; top: -3px; width: 6px; height: 6px; }
 .crosshair.penalty .cring { border-color: rgba(255, 90, 90, 0.95); }
 .crosshair.penalty .chl, .crosshair.penalty .cdot { background: rgba(255, 90, 90, 0.95); }
 .menu { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; pointer-events: auto; cursor: default; }

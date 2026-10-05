@@ -23,14 +23,28 @@ export interface Cowboy {
     forearmR?: THREE.Object3D | null;
   };
   /** Wound-pose joints, driven procedurally every frame (damped chase in
-      home.ts). thighL/R pivot at the hip, kneeL/R at the knee, waist at the
-      waist. Null when the rig predates them (old GLBs) — always skipped. */
+      home.ts). kneeL/R pivot at the knee, waist at the waist, head at its
+      centre. thighL/R pivot `hipLift` m BELOW the hip (GLB legs pivot
+      mid-thigh; the driver shifts them so they swing about the hip). Null
+      when the rig predates them (old GLBs) — always skipped. */
   joints: {
     thighL: THREE.Object3D | null;
     thighR: THREE.Object3D | null;
     kneeL: THREE.Object3D | null;
     kneeR: THREE.Object3D | null;
     waist: THREE.Object3D | null;
+    head: THREE.Object3D | null;
+    hipLift: number;
+    /** Left-arm swing: these nodes rotate together about `pivot` (the
+        shoulder, in their shared parent's frame). */
+    armL: { nodes: THREE.Object3D[]; pivot: THREE.Vector3 } | null;
+    /** Pelvis node whose yaw turns the legs (the waist counter-turns so the
+        upper body keeps facing the foe). Null = no hip turn on this rig. */
+    hips: THREE.Object3D | null;
+    /** +1 when joint rotation.x already follows the group-pitch convention
+        (+ tips the top toward the foe); -1 when the rig sits under a node
+        turned PI about y (the GLB inner), which mirrors every x rotation. */
+    sign: 1 | -1;
   };
   setGunsDown(): void;
   setRaised(): void;
@@ -227,6 +241,11 @@ export function createCowboy(opts: {
     kneeL: kneeL as THREE.Object3D | null,
     kneeR: kneeR as THREE.Object3D | null,
     waist: waist as THREE.Object3D | null,
+    head: null, // hat parts ride the waist, not the head: a nod would leave them
+    hipLift: 0, // thighs already pivot at the hip
+    armL: { nodes: [armL], pivot: armL.position.clone() },
+    hips: null, // legs hang off the group, no pelvis node to turn
+    sign: 1 as const,
   };
   return { group, armR, elbowR, gunTip, parts, joints, setGunsDown, setRaised, setFall };
 }

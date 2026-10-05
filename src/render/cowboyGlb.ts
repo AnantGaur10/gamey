@@ -117,6 +117,19 @@ export async function loadCowboyGlb(
       kneeL: byName("Knee_L"),
       kneeR: byName("Knee_R"),
       waist: byName("Waist"),
+      head: byName("Head"),
+      // Leg_L/R pivot mid-thigh (y 0.52); the thigh/chaps mesh tops out at
+      // the pelvis underside (~0.78), which is where a hip should bend.
+      hipLift: 0.26,
+      // Sleeve_L (with forearm + hand) and the separate cuff hang off the
+      // torso; the shoulder sits just under the pad (torso-local y 0.28).
+      armL: (() => {
+        const n = [byName("Sleeve_L"), byName("Cuff_L")].filter((o): o is THREE.Object3D => !!o);
+        return n.length ? { nodes: n, pivot: new THREE.Vector3(-0.36, 0.25, 0) } : null;
+      })(),
+      hips: byName("Pelvis"),
+      // Joints sit under `inner` (rotation.y = PI): local x is mirrored.
+      sign: -1 as const,
     };
     // Mixer seam: play shipped clips when present (Blender session lands the
     // full set later); procedural no-op path keeps behavior identical without.
