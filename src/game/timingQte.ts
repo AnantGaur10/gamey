@@ -8,8 +8,8 @@ import { mulberry32 } from "./DuelMachine";
 
 export type QteResult = "perfect" | "good" | "miss";
 
-const TRAVERSE0_SEC = 0.24; // needle 0 -> 1 at the start (2x speed, user 2026-10-05)
-const TRAVERSE_MIN_SEC = 0.15;
+const TRAVERSE0_SEC = 0.48; // needle 0 -> 1 at the start (halved again from 0.24, user 2026-10-05)
+const TRAVERSE_MIN_SEC = 0.3;
 const SPEEDUP_PER_HIT = 0.93; // traverse time multiplier per hit
 const ZONE0 = 0.22; // zone width as a fraction of the bar
 const ZONE_MIN = 0.08;
