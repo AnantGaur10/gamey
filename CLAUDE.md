@@ -61,7 +61,6 @@ AGENTS.md holds the project rules (dual build, adapter gating, PR workflow, comm
 
 ## Known drift / open items
 - No git repo yet, so the PR workflow is blocked.
-- `taks/` is a typo of `tasks/`.
 - Tri budget blown (~14k vs 3-5k). Music/SFX, covers and preview videos are not made.
 - `context/2026-10-01.md` is referenced but missing.
 - `TESTING.md` lists only 3 of 5 specs. `scripts/smoke-probe.mjs` hardcodes port 5199. `test-output.log` is stale.

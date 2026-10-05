@@ -57,7 +57,7 @@ Gates for EVERY slice: `npm test` (= typecheck + build:basic + size:basic <20MB)
 ## Slice 8 — Blender animation clips (full set, one Blender sitting) — DONE
 - [x] Clips to author: idle sway loop, DRAW raise flourish, hammer-cock, hit-flinch, victory pose, defeat pose. Death stays ragdoll; gun-arm aim stays procedural.
 - [x] Seam rules: clips on existing empty hierarchy (`H_/O_armR/elbowR/gunTip`) + new pivot empties (e.g. `O_Lean`); loader wraps `inner` in an `anim` group so idle/victory never fight `setFall` on the outer group. Procedural arm owns `armR/elbowR` during aim — DRAW flourish IS the auto-raise: plays pre-engagement when GLB present, procedural `poseArm` raise stays fallback and takes over on first input. Flinch/victory play only in Resolve.
-- [x] Same session also: place origins at pivots (Slice 3 fitting), deepen street tones (open thread `context/2026-09-29.md` §16; superseded by the street rebuild in `taks/2026-10-05-street.md`), UNLINK `St_Sign_*` from Outlaw collection (TEL-fix leftover, `context/2026-09-30.md` §2), re-export per recipe (`use_active_collection`, collections audit — loader guard backstops leaks).
+- [x] Same session also: place origins at pivots (Slice 3 fitting), deepen street tones (open thread `context/2026-09-29.md` §16; superseded by the street rebuild in `tasks/2026-10-05-street.md`), UNLINK `St_Sign_*` from Outlaw collection (TEL-fix leftover, `context/2026-09-30.md` §2), re-export per recipe (`use_active_collection`, collections audit — loader guard backstops leaks).
 - [x] Mixer playback in `cowboyGlb.ts` (+ procedural no-op path so behavior identical without GLB).
 - [x] Verify: clips play on GLB builds, fallback identical, re-export audit zero strays, size PASS.
 
