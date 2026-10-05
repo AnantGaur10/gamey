@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gamey — QA iframe matrix</title>
+    <style>
+      body { font-family: monospace; background: #111; color: #eee; margin: 16px; }
+      .grid { display: flex; flex-wrap: wrap; gap: 16px; }
+      figure { margin: 0; background: #000; padding: 8px; }
+      figcaption { font-size: 12px; margin-bottom: 4px; }
+      iframe { border: 1px solid #555; background: #000; }
+    </style>
+  </head>
+  <body>
+    <h1>gamey QA iframe matrix (DPR=1 check + all portal sizes)</h1>
+    <p>Serve <code>dist-basic</code> (e.g. <code>npx vite preview</code>) then load this page. Each frame forces DPR=1 readability review.
+    Phase-2 targets: play Standard best-of-3 → R2 grades evening, R3 night (foe must stay readable); force a double KO for the hell 1-bullet loop;
+    shop buy/equip + revive offer must show zero dead buttons in basic (ad button is Full-only).</p>
+    <div class="grid" id="grid"></div>
+    <script>
+      const sizes = [
+        ["desktop-nonfs-907x510", 907, 510],
+        ["desktop-nonfs-1216x684", 1216, 684],
+        ["desktop-nonfs-1077x606", 1077, 606],
+        ["desktop-nonfs-821x462", 821, 462],
+        ["desktop-fs-1366x768", 1366, 768],
+        ["desktop-fs-1920x1080", 640, 360],
+        ["desktop-fs-1536x864", 512, 288],
+        ["desktop-fs-1280x720", 640, 360],
+        ["mobile-800x450", 800, 450],
+        ["tablet-1080x607", 540, 304],
+      ];
+      const grid = document.getElementById("grid");
+      const scaleNote = " (scaled preview; open full size for DPR=1 pass)";
+      for (const [name, w, h] of sizes) {
+        const fig = document.createElement("figure");
+        const cap = document.createElement("figcaption");
+        cap.textContent = name + (w < 900 || name.startsWith("mobile") ? "" : scaleNote);
+        const f = document.createElement("iframe");
+        f.width = w;
+        f.height = h;
+        f.src = "./basic.html";
+        f.title = name;
+        fig.appendChild(cap);
+        fig.appendChild(f);
+        grid.appendChild(fig);
+      }
+    </script>
+  </body>
+</html>

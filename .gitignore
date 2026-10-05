@@ -1,0 +1,8 @@
+node_modules/
+dist-basic/
+dist-full/
+test-results/
+playwright-report/
+*.log
+*.blend1
+.DS_Store

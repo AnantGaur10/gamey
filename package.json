@@ -1,0 +1,44 @@
+{
+  "name": "gamey",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --config vite.config.ts",
+    "dev:full": "GAMEY_BUILD=full vite --config vite.config.ts",
+    "build:basic": "GAMEY_BUILD=basic vite build --config vite.config.ts",
+    "build:full": "GAMEY_BUILD=full vite build --config vite.config.ts",
+    "build": "npm run build:basic",
+    "typecheck": "tsc --noEmit",
+    "size:basic": "node scripts/size-check.mjs dist-basic 20",
+    "size:full": "node scripts/size-check.mjs dist-full 50",
+    "test": "npm run typecheck && npm run build:basic && npm run size:basic && npm run test:physics",
+    "play": "bash scripts/play.sh",
+    "play:mobile": "VIEWPORT=800x450 bash scripts/play.sh",
+    "play:record": "RECORD_VIDEO=1 bash scripts/play.sh",
+    "test:headed": "bash scripts/test-visual.sh",
+    "test:all-headed": "bash scripts/test-all-headed.sh",
+    "ai:play": "VIEWPORT=1920x1080 bash scripts/ai-play.sh",
+    "ai:play:mobile": "VIEWPORT=800x450 bash scripts/ai-play.sh",
+    "ai:play:all": "npm run ai:play && npm run ai:play:mobile",
+    "build:models": "blender -b blender/cowboys.blend --python scripts/blender/build_glbs.py",
+    "ai:wounds": "DRAW=1 VIEWPORT=1920x1080 npx tsx tests/ai-wounds.ts",
+    "ai:wounds:mobile": "DRAW=1 VIEWPORT=800x450 npx tsx tests/ai-wounds.ts",
+    "test:physics": "tsx tests/physics-refresh.test.ts",
+    "ai:ragdoll": "VIEWPORT=1920x1080 npx tsx tests/ai-ragdoll.ts",
+    "ai:ragdoll:mobile": "VIEWPORT=800x450 npx tsx tests/ai-ragdoll.ts"
+  },
+  "dependencies": {
+    "cannon-es": "^0.20.0",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^22.20.4",
+    "@types/three": "^0.186.0",
+    "playwright": "^1.63.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.3"
+  }
+}
