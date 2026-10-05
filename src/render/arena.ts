@@ -52,6 +52,15 @@ export const NIGHT: TimeOfDay = {
 // module-level so a slow device stays at 1x for every later duel.
 let pixelRatioCap = 2;
 
+// Right-shoulder perspective camera (see createArena). Offsets in metres
+// from the player's feet: back along the duel line, out to the side, up.
+const FOV_Y = 40;
+const CAM_BACK = 3.1;
+const CAM_SIDE = -1.25; // negative: right of the player as seen from behind
+const CAM_UP = 2.05;
+const CAM_LOOK_SIDE = 1.5; // look point offset beside the foe
+const CAM_LOOK_UP = 1.0;
+
 // Duelist shadows are DECALS, not a shadow map: a real-time map (PCF
 // lookups on every street pixel + a depth pass of ~100 cowboy meshes) cost
 // ~40% frame time on software GL. One soft quad per duelist instead: a
@@ -261,9 +270,10 @@ export function faceToward(
 
 export function createArena(distM: number): {
   scene: THREE.Scene;
-  camera: THREE.OrthographicCamera;
+  camera: THREE.PerspectiveCamera;
   renderer: THREE.WebGLRenderer;
-  getHalfH(): number;
+  /** World metres per CSS px at a world point (perspective: depth-dependent). */
+  worldPerPxAt(p: THREE.Vector3): number;
   setTimeOfDay(t: TimeOfDay): void;
   fitCamera(): void;
   /** Feed every rendered frame's dt: sustained slow frames drop HiDPI to 1x. */
@@ -273,27 +283,26 @@ export function createArena(distM: number): {
   scene.fog = new THREE.FogExp2(NOON.fogColor, NOON.fogDensity);
   const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
 
-  // Negative near (legal for ortho): the bottom rows' rays start BELOW the
-  // ground at the camera plane, so with near > 0 they never met it and showed
-  // a fake under-ground skirt (ruts/shadows/lava cut off in a hard line).
-  // Extending the frustum behind the camera lets them hit the real ground
-  // ~12m back. FogExp2 squares depth, so negative depths fog the same.
-  const camera = new THREE.OrthographicCamera(-8, 8, 4.5, -4.5, -40, 200);
-  // Tight over-the-gun-shoulder 3rd person (locked): the camera rides just
-  // above + behind the player's gun-side shoulder and looks past the head
-  // at the foe. The whole player stays in front of the near plane, so the
-  // body renders solid. Offset toward the gun side keeps the shooting arm
-  // and the foe in frame together.
+  // Right-shoulder perspective 3rd person (user ask 2026-10-05, replaces the
+  // ortho over-shoulder): the camera rides behind + right of the player's
+  // gun shoulder, the player fills the left third and the foe stands just
+  // right of centre down the street. Positive near; the bottom rows simply
+  // see the ground in front of the camera, so no skirt / negative-near trick.
+  // FOV_Y is the 16:9 vertical FOV; narrower aspects widen it (fitCamera) so
+  // the horizontal framing never crops the foe.
+  const camera = new THREE.PerspectiveCamera(FOV_Y, 16 / 9, 0.1, 400);
   const duelDir = new THREE.Vector3(distM, 0, -6.0).normalize();
   const { player: pPos, foe: fPos } = stagePositions(distM);
   const playerYaw = Math.atan2(fPos.x - pPos.x, fPos.z - pPos.z);
   const gunSide = new THREE.Vector3(Math.cos(playerYaw), 0, -Math.sin(playerYaw)); // armR local +x in world
   camera.position
     .copy(pPos)
-    .addScaledVector(duelDir, -1.55)
-    .addScaledVector(gunSide, 0.68)
-    .add(new THREE.Vector3(0, 2.1, 0));
-  camera.lookAt(pPos.clone().lerp(fPos, 0.66).add(new THREE.Vector3(0, 1.32, 0)));
+    .addScaledVector(duelDir, -CAM_BACK)
+    .addScaledVector(gunSide, CAM_SIDE)
+    .add(new THREE.Vector3(0, CAM_UP, 0));
+  // Aim point: past the foe, pulled toward the player's side of the axis so
+  // the foe lands right of centre (the shoulder offset alone puts it left).
+  camera.lookAt(fPos.clone().addScaledVector(gunSide, CAM_LOOK_SIDE).add(new THREE.Vector3(0, CAM_LOOK_UP, 0)));
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setClearColor(0x000000, 0); // CSS sunset gradient shows through
@@ -659,7 +668,7 @@ export function createArena(distM: number): {
     fill.intensity = Math.max(0.14, 0.45 * (t.hemiIntensity / NOON.hemiIntensity));
   }
 
-  let halfH = 3.4;
+  let cssH = 1;
   function fitCamera(): void {
     const host = renderer.domElement.parentElement;
     const w = host ? host.clientWidth : window.innerWidth;
@@ -668,17 +677,23 @@ export function createArena(distM: number): {
     // store's pixel ratio never changes gameplay.
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, coarse ? 1.5 : 2, pixelRatioCap));
     renderer.setSize(w, h, false);
-    const aspect = w / Math.max(1, h);
-    // Over-shoulder: the player is foreground (always in frame), so the
-    // frustum only needs the foe + saloon; tighter = closer feel. All QA
-    // sizes are ~16:9, where the 3.4 floor binds and the foe fills ~1/3
-    // of screen height. Holster zone is DOM-clamped on-screen regardless.
-    halfH = Math.max(3.4, (distM * 0.6 + 3) / (2 * aspect));
-    camera.left = -halfH * aspect;
-    camera.right = halfH * aspect;
-    camera.top = halfH;
-    camera.bottom = -halfH;
+    cssH = Math.max(1, h);
+    const aspect = w / cssH;
+    // All QA sizes are ~16:9. Narrower than that: keep the 16:9 horizontal
+    // FOV (widen vertically) so the foe never leaves the frame.
+    const t = Math.tan(((FOV_Y * Math.PI) / 180) / 2);
+    camera.fov = aspect >= 16 / 9 ? FOV_Y : (2 * Math.atan((t * 16) / 9 / aspect) * 180) / Math.PI;
+    camera.aspect = aspect;
     camera.updateProjectionMatrix();
+  }
+
+  const camFwd = new THREE.Vector3();
+  function worldPerPxAt(p: THREE.Vector3): number {
+    camera.getWorldDirection(camFwd);
+    const depth = Math.max(camera.near, camFwd.dot(p.clone().sub(camera.position)));
+    const t = Math.tan(((camera.fov * Math.PI) / 180) / 2) / camera.zoom;
+    const hCss = renderer.domElement.getBoundingClientRect().height || cssH;
+    return (2 * depth * t) / hCss;
   }
 
   // Watchdog: after a short warm-up, a 1s window averaging > 22ms/frame
@@ -706,7 +721,7 @@ export function createArena(distM: number): {
     scene,
     camera,
     renderer,
-    getHalfH: () => halfH,
+    worldPerPxAt,
     setTimeOfDay,
     fitCamera,
     noteFrame,

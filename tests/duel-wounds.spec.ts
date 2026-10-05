@@ -68,10 +68,10 @@ async function qteHits(page: Page, n: number): Promise<number> {
 }
 
 async function aimBody(page: Page): Promise<{ x: number; y: number }> {
-  const c = await page.locator('canvas').boundingBox();
-  expect(c).not.toBeNull();
-  const x = c!.x + c!.width / 2;
-  const y = c!.y + c!.height / 2 - 20;
+  // Foe body on screen (shoulder cam: the foe stands right of centre).
+  const { x, y } = await page.evaluate(() => (window as unknown as {
+    __gamey: { aimAt(s: string): { x: number; y: number } };
+  }).__gamey.aimAt('foe'));
   await page.mouse.move(x, y);
   await page.waitForTimeout(250);
   return { x, y };

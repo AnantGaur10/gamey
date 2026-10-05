@@ -137,15 +137,21 @@ class AIGameController {
     const canvas = await this.page.locator('canvas').boundingBox({ timeout: 2000 }).catch(() => null);
     if (!canvas) return null;
 
-    const centerX = canvas.x + canvas.width / 2;
-    const centerY = canvas.y + canvas.height / 2;
+    // Foe body on screen (DEV probe; the shoulder cam puts the foe right of
+    // centre), head from the same probe.
+    const foe = await this.page.evaluate(() => {
+      const g = (window as unknown as { __gamey?: { aimAt(s: string, p?: string): { x: number; y: number } } }).__gamey;
+      return g ? { body: g.aimAt('foe'), head: g.aimAt('foe', 'head') } : null;
+    }).catch(() => null);
+    const centerX = foe ? foe.body.x : canvas.x + canvas.width / 2;
+    const centerY = foe ? foe.body.y + 20 : canvas.y + canvas.height / 2;
 
     let targetX = centerX;
     let targetY = centerY;
 
     switch (target) {
       case 'head':
-        targetY = centerY - 100;
+        targetY = foe ? foe.head.y : centerY - 100;
         break;
       case 'body':
         targetY = centerY - 20;

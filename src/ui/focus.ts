@@ -1,7 +1,9 @@
-// Focus input: timing QTE (user ask 2026-10-05, replaces Space mashing and
-// the touch tap pads). A needle ping-pongs across a bar; stop it in the gold
-// zone. Every hit spawns a new, narrower zone; chain as many as you can
-// before DRAW. Logic lives in src/game/timingQte.ts; this file only draws it.
+// Focus input: timing QTE ring (user ask 2026-10-05, replaces the bar). The
+// ring sits on the foe's body and its radius IS the crosshair radius, so it
+// shrinks/grows with every result. A marker swings back and forth around the
+// ring (the gap at the top is where it turns); press while it is on the gold
+// arc. Every press moves the arc; a hit narrows it (and speeds the marker),
+// a miss widens it. Logic lives in src/game/timingQte.ts; this file only draws.
 // - PC: Space / Enter presses (key repeat ignored). Mouse clicks are a miss
 //   (home.ts routes them; the mouse stays in the holster).
 // - Touch: a tap anywhere outside the holster presses (home.ts routes it).
@@ -18,13 +20,17 @@ export interface QteView {
   zoneW: number;
   perfectW: number;
   streak: number;
+  /** Ring centre in viewport px (the foe's body) and radius in px. */
+  x: number;
+  y: number;
+  r: number;
 }
 
 export interface FocusUI {
   destroy(): void;
-  /** 0..1 bloom-shrink progress (slim line under the bar). */
+  /** 0..1 bloom-shrink progress (slim bar under the ring). */
   setProgress(f: number): void;
-  /** Needle + zone, every rendered frame. */
+  /** Marker + arc + ring placement, every rendered frame. */
   render(v: QteView): void;
   /** One-shot result flash. */
   flash(res: QteResult): void;
@@ -41,24 +47,38 @@ export function isCoarsePointer(): boolean {
 }
 
 const RESULT_TEXT: Record<QteResult, string> = { perfect: "PERFECT!", good: "GOOD", miss: "MISS" };
+/** Turnaround gap at the top of the ring (degrees): QTE 0 and 1 sit at its edges. */
+const GAP_DEG = 28;
+/** Room around the ring for the stroke + marker (px). */
+const PAD = 14;
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** QTE position 0..1 -> clockwise angle from 12 o'clock (radians). */
+function angleOf(f: number): number {
+  const t = Math.min(1, Math.max(0, f));
+  return ((GAP_DEG / 2 + t * (360 - GAP_DEG)) * Math.PI) / 180;
+}
 
 export function mountFocusUI(root: HTMLElement, h: FocusHandlers): FocusUI {
-  const coarse = isCoarsePointer();
-  const bar = document.createElement("div");
-  bar.className = "qte";
-  bar.innerHTML =
-    `<span class="qlabel">${coarse ? "<b>TAP</b>" : "<b>SPACE</b>"} ON THE GOLD · CHAIN HITS</span>` +
-    `<span class="qtrack"><span class="qzone"><span class="qperfect"></span></span><span class="qneedle"></span></span>` +
+  const ui = document.createElement("div");
+  ui.className = "qte";
+  ui.innerHTML =
+    `<svg class="qtrack" xmlns="${SVG_NS}">` +
+    `<path class="qbase"/><path class="qzone"/><path class="qperfect"/><path class="qneedle"/>` +
+    `</svg>` +
     `<span class="qinfo"><span class="qres"></span><span class="qstreak"></span></span>` +
     `<span class="qprog"><span class="qfill"></span></span>`;
-  root.appendChild(bar);
-  const zoneEl = bar.querySelector(".qzone") as HTMLElement;
-  const perfEl = bar.querySelector(".qperfect") as HTMLElement;
-  const needleEl = bar.querySelector(".qneedle") as HTMLElement;
-  const resEl = bar.querySelector(".qres") as HTMLElement;
-  const streakEl = bar.querySelector(".qstreak") as HTMLElement;
-  const fill = bar.querySelector(".qfill") as HTMLElement;
+  root.appendChild(ui);
+  const svg = ui.querySelector(".qtrack") as SVGSVGElement;
+  const baseEl = ui.querySelector(".qbase") as SVGPathElement;
+  const zoneEl = ui.querySelector(".qzone") as SVGPathElement;
+  const perfEl = ui.querySelector(".qperfect") as SVGPathElement;
+  const needleEl = ui.querySelector(".qneedle") as SVGPathElement;
+  const resEl = ui.querySelector(".qres") as HTMLElement;
+  const streakEl = ui.querySelector(".qstreak") as HTMLElement;
+  const fill = ui.querySelector(".qfill") as HTMLElement;
   let flashTimer = 0;
+  let lastSize = -1;
 
   const onKey = (e: KeyboardEvent) => {
     if (e.code !== "Space" && e.code !== "Enter") return;
@@ -68,38 +88,59 @@ export function mountFocusUI(root: HTMLElement, h: FocusHandlers): FocusUI {
   };
   window.addEventListener("keydown", onKey);
 
-  const pct = (f: number) => `${(Math.min(1, Math.max(0, f)) * 100).toFixed(2)}%`;
+  // Arc between two QTE positions on a ring of radius r centred at (c, c).
+  const arc = (c: number, r: number, f0: number, f1: number): string => {
+    const a0 = angleOf(f0), a1 = angleOf(f1);
+    const p = (a: number) => `${(c + r * Math.sin(a)).toFixed(2)} ${(c - r * Math.cos(a)).toFixed(2)}`;
+    return `M ${p(a0)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${p(a1)}`;
+  };
+
   return {
     destroy() {
       window.removeEventListener("keydown", onKey);
       window.clearTimeout(flashTimer);
-      bar.remove();
+      ui.remove();
     },
     setProgress(f: number) {
-      fill.style.width = pct(f);
+      fill.style.width = `${(Math.min(1, Math.max(0, f)) * 100).toFixed(2)}%`;
     },
     render(v: QteView) {
-      zoneEl.style.left = pct(v.zoneC - v.zoneW / 2);
-      zoneEl.style.width = pct(v.zoneW);
-      const pw = v.perfectW / v.zoneW;
-      perfEl.style.left = pct((1 - pw) / 2);
-      perfEl.style.width = pct(pw);
-      needleEl.style.left = pct(v.needle);
+      const r = v.r;
+      const c = r + PAD;
+      const size = Math.ceil(2 * c);
+      if (size !== lastSize) {
+        lastSize = size;
+        svg.setAttribute("width", `${size}`);
+        svg.setAttribute("height", `${size}`);
+        svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+      }
+      const rr = root.getBoundingClientRect();
+      ui.style.left = `${v.x - rr.left}px`;
+      ui.style.top = `${v.y - rr.top}px`;
+      ui.style.setProperty("--qr", `${c}px`);
+      baseEl.setAttribute("d", arc(c, r, 0, 1));
+      zoneEl.setAttribute("d", arc(c, r, v.zoneC - v.zoneW / 2, v.zoneC + v.zoneW / 2));
+      perfEl.setAttribute("d", arc(c, r, v.zoneC - v.perfectW / 2, v.zoneC + v.perfectW / 2));
+      // Marker: a radial tick across the ring at the needle's angle.
+      const a = angleOf(v.needle);
+      const s = Math.sin(a), k = -Math.cos(a);
+      const r0 = Math.max(2, r - 9), r1 = r + 9;
+      needleEl.setAttribute("d", `M ${(c + r0 * s).toFixed(2)} ${(c + r0 * k).toFixed(2)} L ${(c + r1 * s).toFixed(2)} ${(c + r1 * k).toFixed(2)}`);
       streakEl.textContent = v.streak > 1 ? `x${v.streak}` : "";
     },
     flash(res: QteResult) {
       resEl.textContent = RESULT_TEXT[res];
-      bar.classList.remove("hit-perfect", "hit-good", "hit-miss");
-      void bar.offsetWidth; // restart the CSS flash
-      bar.classList.add(`hit-${res}`);
+      ui.classList.remove("hit-perfect", "hit-good", "hit-miss");
+      void ui.offsetWidth; // restart the CSS flash
+      ui.classList.add(`hit-${res}`);
       window.clearTimeout(flashTimer);
       flashTimer = window.setTimeout(() => {
         resEl.textContent = "";
-        bar.classList.remove("hit-perfect", "hit-good", "hit-miss");
+        ui.classList.remove("hit-perfect", "hit-good", "hit-miss");
       }, 420);
     },
     setVisible(v: boolean) {
-      bar.classList.toggle("hidden", !v);
+      ui.classList.toggle("hidden", !v);
     },
   };
 }

@@ -83,7 +83,7 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
     <button class="primary" data-m="standard">STANDARD — BEST OF ${BEST_OF}</button>
     <button data-m="deathmatch">DEATHMATCH — STREAK</button>
     <button data-m="shop">SHOP</button>
-    <div class="note">Holster first, then hit Space/Enter (PC) or tap (touch) when the moving line is in the gold, as many times as you can, to shrink bloom. Leaving the holster restarts the countdown. DRAW! → aim → fire. Headshot kills instantly.</div>
+    <div class="note">Holster first, then hit Space/Enter (PC) or tap (touch) when the marker swinging round the ring on the foe is on the gold arc, as many times as you can: the ring is your crosshair and shrinks with every hit. Leaving the holster restarts the countdown. DRAW! → aim → fire. Headshot kills instantly.</div>
   </div>`);
   
   // Mute button (top-right)
@@ -234,7 +234,7 @@ function runDuel(
   const rIdx = series?.roundIndex ?? (run ? run.streak % AI_ROSTER.length : 0);
   const level = run ? Math.floor(run.streak / AI_ROSTER.length) : 0;
 
-  const { scene, camera, renderer, getHalfH, fitCamera, setTimeOfDay, noteFrame } = createArena(distM);
+  const { scene, camera, renderer, worldPerPxAt, fitCamera, setTimeOfDay, noteFrame } = createArena(distM);
   // Time-of-day driver: R1 noon → R2 evening → R3+ night. Hell overrides.
   setTimeOfDay(timeOfDayForRound(hellRound ? 2 : rIdx));
   document.body.style.background = hellRound
@@ -393,7 +393,7 @@ function runDuel(
   const hud = el(`<div class="hud">
     <div class="cue">HOLSTER UP</div><div class="sub"></div>
   </div>`);
-  const cross = el(`<div class="crosshair" style="display:none"><i class="chl t"></i><i class="chl b"></i><i class="chl l"></i><i class="chl r"></i><i class="cdot"></i></div>`);
+  const cross = el(`<div class="crosshair" style="display:none"><i class="chl t"></i><i class="chl b"></i><i class="chl l"></i><i class="chl r"></i><i class="cring"></i><i class="cdot"></i></div>`);
   const spreadCross = el(`<div class="crosshair spread" style="display:none"></div>`);
   hud.appendChild(cross);
   hud.appendChild(spreadCross);
@@ -826,7 +826,7 @@ function runDuel(
     cross.style.left = `${cx - rr.left}px`;
     cross.style.top = `${cy - rr.top}px`;
     cross.style.transform = "translate(-50%, -50%)";
-    // Bloom drives the line gap (radius), never a ring: classic lines+dot.
+    // Bloom drives the gap (radius): ring + lines + dot, same radius as the Focus ring.
     cross.style.setProperty("--gap", `${Math.max(4, crossPx() / 2)}px`);
   }
 
@@ -851,33 +851,33 @@ function runDuel(
     return { x: r.left + ((p.x + 1) / 2) * r.width, y: r.top + ((1 - p.y) / 2) * r.height };
   }
 
-  // Holster zone is a FIXED WORLD-SIZE box (1.35m), projected to screen:
-  // browser/game zoom rescales zone and foe together, so the holster →
-  // enemy travel and the stay-inside challenge are identical at any zoom.
+  // Holster zone: a fixed fraction of the view height (the old ortho cam's
+  // 1.35m box), centred on the player's projected hip. Browser/game zoom
+  // rescales zone and foe together, so the holster → enemy travel is
+  // identical at any zoom. The clamp keeps it on-screen.
+  const holsterWorld = stage.player.clone().add(new THREE.Vector3(0, 0.9, 0));
   function zonePx(): number {
-    return clamp(1.35 / worldPerPx(), 72, 220);
+    const hCss = renderer.domElement.getBoundingClientRect().height || window.innerHeight;
+    return clamp(hCss * 0.2, 72, 220);
   }
   function updateZone(): void {
     const s = zonePx();
     zone.style.width = `${s}px`;
     zone.style.height = `${s}px`;
-    const feet = project(stage.player);
-    const x = clamp(feet.x + s * 0.41, s / 2 + 8, window.innerWidth - s / 2 - 8);
-    const y = clamp(feet.y + s * 0.86, s / 2 + 8, window.innerHeight - s / 2 - 8);
+    const hip = project(holsterWorld);
+    const x = clamp(hip.x, s / 2 + 8, window.innerWidth - s / 2 - 8);
+    const y = clamp(hip.y, s / 2 + 8, window.innerHeight - s / 2 - 8);
     zone.style.left = `${x - s / 2}px`;
     zone.style.top = `${y - s / 2}px`;
   }
   updateZone();
 
-  function worldPerPx(): number {
-    const hCss = renderer.domElement.getBoundingClientRect().height || window.innerHeight;
-    return (2 * getHalfH()) / hCss;
-  }
-
+  // Crosshair diameter in CSS px: bloom is an angle, so on the perspective
+  // camera it is (nearly) depth-independent.
   function crossPx(): number {
     const toAim = camera.position.distanceTo(aimWorld);
     const worldR = Math.tan((machine.bloomDeg * Math.PI) / 180) * toAim;
-    return Math.max(8, (2 * worldR) / worldPerPx()); // low floor: the 0.12° min bloom must still read smaller
+    return Math.max(8, (2 * worldR) / worldPerPxAt(aimWorld)); // low floor: the 0.12° min bloom must still read smaller
   }
 
   // Aim plane through the foe, facing the camera; clamped to a reach box.
@@ -932,8 +932,11 @@ function runDuel(
     if (machine.phase !== "ready") return;
     machine.startFocus();
     cue.textContent = "FOCUS! 3.0s";
-    sub.textContent = coarse ? "Tap when the line is in the gold" : "SPACE / ENTER when the line is in the gold · don't click";
+    sub.textContent = coarse ? "Tap when the marker is on the gold arc" : "SPACE / ENTER when the marker is on the gold arc · don't click";
+    // The ring on the foe shows the crosshair during Focus; the pointer
+    // crosshair (still sized every frame) appears at DRAW.
     cross.style.display = "block";
+    cross.classList.add("focusing");
     adapter.gameplayStart();
   }
 
@@ -1544,7 +1547,23 @@ function runDuel(
     if (res === "miss") focusPenalty();
   }
   const focusUI: FocusUI = mountFocusUI(root, { onPress: qtePress });
-  focusUI.render({ needle: qte.pos, zoneC: qte.zoneC, zoneW: qte.zoneW, perfectW: qte.perfectW, streak: 0 });
+  // Ring QTE on the foe's body; its radius is the crosshair radius (floored
+  // so the arc stays readable at the smallest blooms / phone heights).
+  const RING_MIN_R = 16;
+  function renderQte(needle: number): void {
+    const c = foeScreen().body;
+    focusUI.render({
+      needle,
+      zoneC: qte.zoneC,
+      zoneW: qte.zoneW,
+      perfectW: qte.perfectW,
+      streak: qte.streak,
+      x: c.x,
+      y: c.y,
+      r: Math.max(RING_MIN_R, crossPx() / 2),
+    });
+  }
+  renderQte(qte.pos);
 
   // ---- input routing ----
   const touchDown = new Map<number, { x: number; y: number; t: number; moved: boolean }>();
@@ -1843,15 +1862,9 @@ function runDuel(
       } else {
         const left = machine.focusTicksLeft() / 60;
         cue.textContent = `FOCUS! ${left.toFixed(1)}s`;
-        sub.textContent = coarse ? "Tap when the line is in the gold" : "SPACE / ENTER when the line is in the gold · don't click";
+        sub.textContent = coarse ? "Tap when the marker is on the gold arc" : "SPACE / ENTER when the marker is on the gold arc · don't click";
       }
-      focusUI.render({
-        needle: qte.peek(machine.paused ? 0 : alpha * STEP), // out of the holster: frozen
-        zoneC: qte.zoneC,
-        zoneW: qte.zoneW,
-        perfectW: qte.perfectW,
-        streak: qte.streak,
-      });
+      renderQte(qte.peek(machine.paused ? 0 : alpha * STEP)); // out of the holster: frozen
       focusUI.setProgress(1 - (machine.bloomDeg - gun.bloomMinDeg) / (gun.bloomStartDeg - gun.bloomMinDeg));
       // Crosshair lives where the pointer is — never pinned to the foe.
       // Aim itself stays parked (gun down) until DRAW.
@@ -1873,6 +1886,7 @@ function runDuel(
       try { (player as unknown as CowboyGlb).stopClips?.(); } catch { /* noop */ }
       drawT = 0; // holster-pull choreography runs for both duelists
       cross.style.display = "block";
+      cross.classList.remove("focusing");
       scheduleFoe();
     }
 
@@ -1918,7 +1932,7 @@ function runDuel(
     placeShadow(playerShadow, player, playerWound, playerHP, playerDoll);
 
     gunsmoke.update(dt);
-    // Kill punch: a short ortho push-in once the round is decided. Only
+    // Kill punch: a short push-in (camera.zoom narrows the FOV) once the round is decided. Only
     // after roundOver (aim/hit tests read the camera; they're off by then).
     if (punchT >= 0 && punchT < 0.6) {
       punchT += dt;
