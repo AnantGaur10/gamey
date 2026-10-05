@@ -2,7 +2,7 @@
 
 @AGENTS.md
 
-AGENTS.md holds the project rules (dual build, adapter gating, PR workflow, commands). This file adds the map, QA rules, locked design and gotchas distilled from `specs/`, `context/` and the code.
+AGENTS.md holds the project rules (dual build, adapter gating, git workflow, commands). This file adds the map, QA rules, locked design and gotchas distilled from `specs/`, `context/` and the code.
 
 ## Read first
 - `context/`: design is spread across all dated files (2026-09-24 … 2026-10-02). Read newest to oldest; later "corrections" sections override earlier numbers. Append-only: same-day edits go in the same file.
@@ -60,7 +60,6 @@ AGENTS.md holds the project rules (dual build, adapter gating, PR workflow, comm
 - Shop prices (100/120/50) and best-of-3 are NOT user-locked.
 
 ## Known drift / open items
-- No git repo yet, so the PR workflow is blocked.
 - Tri budget blown (~14k vs 3-5k). Music/SFX, covers and preview videos are not made.
 - `context/2026-10-01.md` is referenced but missing.
 - `TESTING.md` lists only 3 of 5 specs. `scripts/smoke-probe.mjs` hardcodes port 5199. `test-output.log` is stale.
