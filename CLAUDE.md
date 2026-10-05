@@ -11,7 +11,7 @@ AGENTS.md holds the project rules (dual build, adapter gating, git workflow, com
 ## Architecture
 - `src/main-basic.ts` / `src/main-full.ts` (4 lines each) call `boot(root, adapter)` from `src/ui/home.ts`. There is no `src/boot.ts`.
 - `src/ui/home.ts` (~1800 lines): home, shop, `runSeries` (best-of-3, first to 2), `runDeathmatch` (endless 3-duel loops, HP carries over), `runDuel` (frame loop, hits, wounds, revive, AI scheduler). DEV-only `window.__gamey` probe.
-- `src/ui/focus.ts`: focus pads/keys. iOS audio resume on `touchend` lives in `boot` (`home.ts`).
+- `src/ui/focus.ts`: focus timing-QTE bar (draw + Space/Enter); the QTE logic is `src/game/timingQte.ts` (fixed clock, seeded). iOS audio resume on `touchend` lives in `boot` (`home.ts`).
 - `src/portal/`: `PortalAdapter.ts` (interface + `Progress`), `NoopAdapter.ts` (real basic impl), `CrazyGamesAdapter.ts` (stub, no SDK yet).
 - `src/game/`: pure logic (`DuelMachine` seeded 60Hz + `rollWound`, `damage`, `economy`, `projectiles`, `Transport`, `fixedStep`). Never import render, DOM, or SDK here.
 - Frame loop (`home.ts` `frame()`): one `createFixedStepper` (`src/game/fixedStep.ts`) runs `machine.step`, recoil recover, `stepBullets()` and ragdoll `fixedStep(h)` inside its fixed callback; afterwards `doll.follow()` (alive) / `doll.sync(alpha)` (corpse) and `renderBullets(alpha)` interpolate. New physics goes inside that callback, never per frame.
@@ -42,7 +42,7 @@ AGENTS.md holds the project rules (dual build, adapter gating, git workflow, com
 
 ## Locked design (summary)
 - Cowboy duel, ortho over-the-shoulder camera, no blood (dust puff only).
-- Flow: RoundIntro, Focus 3.0s, DRAW!, Fire, Resolve. Countdown runs only while the pointer is in the holster zone.
+- Flow: RoundIntro, Focus 3.0s, DRAW!, Fire, Resolve. Focus is a timing QTE (stop the needle in the gold; every press moves the zone, a hit narrows it + speeds the needle, a miss widens it; chain hits until DRAW). PC: leaving the holster zone restarts the whole Focus (3.0s, bloom, QTE) on return; touch is committed once started. `context/2026-10-05.md` §5.
 - Guns: default 49 dmg / 380ms, lifesteal 38, gold 37. Falloff 1.00 at 9m, 0.92 at 11m, 0.70 at 14m (body only). Head is an instant kill.
 - AI reaction: `base * 0.97^round * 0.94^level`, floor 180ms.
 - Double KO leads to hell sudden-death (1 bullet each, loops on double miss).
@@ -56,7 +56,7 @@ AGENTS.md holds the project rules (dual build, adapter gating, git workflow, com
 - Gun arm: `stabilizeArm` puts `armR` on a mount that cancels the body's wound pitch+roll, so arm angles are standing-frame at any pose (no per-pose arm compensation needed).
 - Ragdoll (`render/ragdoll.ts`): 10 bodies joined by `RagdollJoint` (ConeTwist with a fixed twist reference = the character's lateral axis; stock cannon twist refs start violated between non-aligned bodies and tore shoulder/elbow 0.3-0.5m). Cannon pivots are in the body's LOCAL frame (world offsets tore limbs apart); the forearm box excludes the gun; judge settle speed WITHOUT a CDP screencast (it slows the sim). `__gamey.jointErrors(side)` = physics pivot gaps; the round's `cleanup()` disposes the doll ~1.3-1.5s post-kill (visuals stay frozen), so read physics early. `context/2026-10-04.md` §7, §11.
 - Projectiles need 8 substeps per tick or they tunnel through the head.
-- HUD is fixed px. Tests assert DOM selectors (`.cue`, `.hp.you i`, `.chamber.live`, `.crosshair`), so HUD refactors break them.
+- HUD is fixed px. Tests assert DOM selectors (`.cue`, `.hp.you i`, `.chamber.live`, `.crosshair`, `.qte .qtrack/.qfill/.qres`) and the cue words `HOLSTER UP` / `FOCUS` / `DRAW`, so HUD refactors break them. Tests time QTE presses through the DEV `__gamey.qte()` probe (`qteHits()` helper).
 - Don't delay `GameplayStart`. Keep hell and GLB assets lazy.
 - Shop prices (100/120/50) and best-of-3 are NOT user-locked.
 

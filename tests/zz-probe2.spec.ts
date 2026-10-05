@@ -5,7 +5,7 @@ test('joint readout', async ({ page }) => {
   await page.waitForSelector('.readyzone', { timeout: 8000 });
   const z = await page.locator('.readyzone').boundingBox();
   await page.mouse.move(z!.x + z!.width / 2, z!.y + z!.height / 2);
-  await page.waitForFunction(() => (document.querySelector('.cue')?.textContent ?? '').includes('TAP'), { timeout: 8000 });
+  await page.waitForFunction(() => (document.querySelector('.cue')?.textContent ?? '').includes('FOCUS'), { timeout: 8000 });
   for (let i = 0; i < 6; i++) { await page.keyboard.press('Space'); await page.waitForTimeout(110); }
   await page.waitForFunction(() => (document.querySelector('.cue')?.textContent ?? '').includes('DRAW'), { timeout: 15000 });
   await page.waitForTimeout(2000);

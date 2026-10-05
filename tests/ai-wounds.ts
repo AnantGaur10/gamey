@@ -22,7 +22,7 @@ const CAP: Record<string, { headY: number; lo: number; hi: number }> = {
     // which is where wound-pose arm compensation matters.
     const z = (await p.locator('.readyzone').boundingBox())!;
     await p.mouse.move(z.x + z.width / 2, z.y + z.height / 2);
-    await p.waitForFunction(() => (document.querySelector('.cue')?.textContent ?? '').includes('TAP'), { timeout: 8000 });
+    await p.waitForFunction(() => (document.querySelector('.cue')?.textContent ?? '').includes('FOCUS'), { timeout: 8000 });
     for (let i = 0; i < 10; i++) { await p.keyboard.press('Space'); await p.waitForTimeout(100); }
     await p.waitForFunction(() => (document.querySelector('.cue')?.textContent ?? '').includes('DRAW'), { timeout: 15000 });
     await p.waitForTimeout(1200);

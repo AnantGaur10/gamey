@@ -2,7 +2,7 @@ import { test, expect, Page } from '@playwright/test';
 
 // Duel combat assertions: hit registration both ways, ammo, bloom behavior.
 // Black-box (DOM only): cue text, HP bar widths, chamber/pip counts, --gap.
-// Space works for focus on every device (focus.ts key handler is universal),
+// Space works for the focus QTE on every device (focus.ts key handler is universal),
 // mouse click fires (pointerdown path), so one flow covers all projects.
 
 interface DuelState {
@@ -28,7 +28,7 @@ async function duelState(page: Page): Promise<DuelState> {
       ammo: document.querySelectorAll('.cylinder .chamber.live').length,
       foeSpent: document.querySelectorAll('.foeammo i.spent').length,
       gap: cross ? parseFloat(getComputedStyle(cross).getPropertyValue('--gap') || '0') : 0,
-      fill: (document.querySelector('.keybar .kfill') as HTMLElement | null)?.style.width ?? '',
+      fill: (document.querySelector('.qte .qfill') as HTMLElement | null)?.style.width ?? '',
     };
   });
 }
@@ -49,7 +49,7 @@ async function parkInHolster(page: Page): Promise<void> {
   expect(z).not.toBeNull();
   await page.mouse.move(z!.x + z!.width / 2, z!.y + z!.height / 2);
   await page.waitForFunction(
-    () => (document.querySelector('.cue')?.textContent ?? '').includes('TAP'),
+    () => (document.querySelector('.cue')?.textContent ?? '').includes('FOCUS'),
     { timeout: 8000 },
   );
 }
@@ -61,11 +61,28 @@ async function waitDraw(page: Page): Promise<void> {
   );
 }
 
-async function tapSpace(page: Page, n: number): Promise<void> {
-  for (let i = 0; i < n; i++) {
-    await page.keyboard.press('Space');
-    await page.waitForTimeout(110);
-  }
+// Focus QTE: press Space (the real window keydown path) only while the
+// needle is well inside the gold zone. Reads the DEV __gamey.qte() probe
+// every 4ms (the needle is time-continuous), so it never presses a miss.
+async function qteHits(page: Page, n: number): Promise<number> {
+  return page.evaluate((want) => new Promise<number>((resolve) => {
+    type Q = { needle: number; zoneC: number; zoneW: number; frozen: boolean; hits: number; phase: string; paused: boolean };
+    const g = (window as unknown as { __gamey: { qte(): Q } }).__gamey;
+    const start = g.qte().hits;
+    const t0 = performance.now();
+    const loop = () => {
+      const q = g.qte();
+      if (q.hits - start >= want || q.phase !== 'focus' || performance.now() - t0 > 8000) {
+        resolve(q.hits - start);
+        return;
+      }
+      if (!q.frozen && !q.paused && Math.abs(q.needle - q.zoneC) < (q.zoneW / 2) * 0.6) {
+        window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }));
+      }
+      setTimeout(loop, 4);
+    };
+    loop();
+  }), n);
 }
 
 async function aimBody(page: Page): Promise<{ x: number; y: number }> {
@@ -91,27 +108,85 @@ test.describe('Gamey - Combat', () => {
     expect(b.fill).toBe(a.fill);
   });
 
-  test('focus taps shrink bloom (gap down, bar up)', async ({ page }) => {
+  test('QTE hits in the gold shrink bloom (gap down, bar up)', async ({ page }) => {
     await startStandard(page);
     await parkInHolster(page);
     await page.waitForTimeout(300);
+    await expect(page.locator('.qte .qtrack')).toBeVisible();
     const before = await duelState(page);
-    await tapSpace(page, 6);
+    // >= 1: software-GL CI renders slowly, so fewer hits fit before DRAW
+    expect(await qteHits(page, 2)).toBeGreaterThanOrEqual(1);
     const after = await duelState(page);
     expect(after.gap).toBeLessThan(before.gap - 3);
-    // Progress readout is layout-split: PC keybar fill vs touch pads.
-    const keybar = await page.locator('.keybar .kfill').count();
-    if (keybar > 0) {
-      expect(parseFloat(after.fill || '0')).toBeGreaterThan(parseFloat(before.fill || '0'));
-    } else {
-      expect(await page.locator('.pad.left, .pad.right').count()).toBeGreaterThan(0);
-    }
+    expect(parseFloat(after.fill || '0')).toBeGreaterThan(parseFloat(before.fill || '0'));
+  });
+
+  test('QTE miss: bloom grows, zone widens and moves', async ({ page }) => {
+    await startStandard(page);
+    await parkInHolster(page);
+    await page.waitForTimeout(300);
+    const r = await page.evaluate(() => new Promise<{ b0: number; b1: number; misses: number; w0: number; w1: number; c0: number; c1: number }>((resolve) => {
+      type Q = { needle: number; zoneC: number; zoneW: number; frozen: boolean; misses: number; bloom: number };
+      const g = (window as unknown as { __gamey: { qte(): Q } }).__gamey;
+      const loop = () => {
+        const q = g.qte();
+        if (!q.frozen && Math.abs(q.needle - q.zoneC) > q.zoneW) {
+          window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }));
+          // zone respawns after the 0.12s result freeze
+          setTimeout(() => {
+            const a = g.qte();
+            resolve({ b0: q.bloom, b1: a.bloom, misses: a.misses, w0: q.zoneW, w1: a.zoneW, c0: q.zoneC, c1: a.zoneC });
+          }, 250);
+          return;
+        }
+        setTimeout(loop, 4);
+      };
+      loop();
+    }));
+    expect(r.misses).toBe(1);
+    expect(r.b1).toBeGreaterThan(r.b0);
+    expect(r.w1).toBeGreaterThan(r.w0);
+    expect(r.c1).not.toBeCloseTo(r.c0, 3);
+  });
+
+  test('leaving the holster restarts the whole countdown', async ({ page, isMobile }) => {
+    test.skip(isMobile, 'touch has no hover: Focus is committed once started');
+    await startStandard(page);
+    await parkInHolster(page);
+    const z = (await page.locator('.readyzone').boundingBox())!;
+    expect(await qteHits(page, 1)).toBe(1);
+    await page.waitForTimeout(900);
+    type Q = { secsLeft: number; bloom: number; hits: number; paused: boolean; phase: string };
+    const q = () => page.evaluate(() => (window as unknown as { __gamey: { qte(): Q } }).__gamey.qte());
+    const mid = await q();
+    expect(mid.secsLeft).toBeLessThan(2.4);
+    const gapMid = (await duelState(page)).gap;
+    await page.mouse.move(z.x - 200, z.y - 200); // out of the holster
+    await page.waitForTimeout(400);
+    const out = await q();
+    // needle frozen while out (was drawn extrapolated: jittered at the left)
+    const needleA = await page.evaluate(() => (window as unknown as { __gamey: { qte(): { needle: number } } }).__gamey.qte().needle);
+    await page.waitForTimeout(300);
+    const needleB = await page.evaluate(() => (window as unknown as { __gamey: { qte(): { needle: number } } }).__gamey.qte().needle);
+    expect(needleB).toBe(needleA);
+    expect((await duelState(page)).gap).toBeGreaterThan(gapMid); // crosshair back to default size
+    expect(out.paused).toBe(true);
+    expect(out.secsLeft).toBeGreaterThan(2.95);
+    expect(out.hits).toBe(0);
+    expect(out.bloom).toBeGreaterThan(mid.bloom); // back to the start bloom
+    expect(await page.locator('.cue').textContent()).toContain('HOLSTER');
+    await page.mouse.move(z.x + z.width / 2, z.y + z.height / 2); // back in
+    await page.waitForTimeout(500);
+    const back = await q();
+    expect(back.paused).toBe(false);
+    expect(back.phase).toBe('focus');
+    expect(back.secsLeft).toBeGreaterThan(2.3); // counting down from a fresh 3.0s
   });
 
   test('player bullets hit the foe', async ({ page }) => {
     await startStandard(page);
     await parkInHolster(page);
-    await tapSpace(page, 6);
+    await qteHits(page, 3);
     await waitDraw(page);
     // 500ms spacing beats the 380ms cooldown; 4 body shots, foe needs ~3
     // return hits to kill us, so we land ours first. Hit OR kill cue passes.
@@ -130,7 +205,7 @@ test.describe('Gamey - Combat', () => {
   test('foe fires back (exchanges)', async ({ page }) => {
     await startStandard(page);
     await parkInHolster(page);
-    await tapSpace(page, 4);
+    await qteHits(page, 3);
     await waitDraw(page);
     // Passive player: the AI must spend a bullet (pips) or wound us.
     await page.waitForFunction(
@@ -163,7 +238,7 @@ test.describe('Gamey - Combat', () => {
     page.on('pageerror', (err) => errors.push(err.message));
     await startStandard(page);
     await parkInHolster(page);
-    await tapSpace(page, 5);
+    await qteHits(page, 3);
     await waitDraw(page);
     const p = await aimBody(page);
     await page.mouse.click(p.x, p.y);

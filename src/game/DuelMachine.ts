@@ -25,6 +25,14 @@ const HOLD_SHRINK_DEG_PER_SEC = 0.3;
 const MISS_GROW_DEG = 0.25;
 const POST_DRAW_REGROW_DEG_PER_SEC = 0.5;
 const MAX_TAPS_PER_SEC = 12;
+// Timing-QTE focus (2026-10-05): a hit shrinks bloom by focusPerTapDeg x
+// these. ~5 perfect hits in the 3s window (~8-10 attempts fit) reach
+// bloomMin (range ~1.8°); a miss costs MISS_GROW_DEG like the old
+// outside-pad tap.
+const QTE_PERFECT_MULT = 1.2;
+const QTE_GOOD_MULT = 0.8;
+const SPREAD_RIM_P = 0.7; // share of shots in the outer ring of the bloom
+const SPREAD_INNER_R = 0.6; // ring starts at this fraction of the radius
 
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -93,6 +101,31 @@ export class DuelMachine {
     return shrink;
   }
 
+  /** Timing-QTE result: perfect/good shrink bloom, miss grows it. */
+  addQte(res: "perfect" | "good" | "miss"): void {
+    if (this.phase !== "focus") return;
+    if (res === "miss") {
+      this.addMiss();
+      return;
+    }
+    const mult = res === "perfect" ? QTE_PERFECT_MULT : QTE_GOOD_MULT;
+    this.tapCount += 1;
+    this.bloomDeg = Math.max(this.bloomMinDeg, this.bloomDeg - this.focusPerTapDeg * mult);
+  }
+
+  /** Holster left before DRAW: the whole Focus restarts (full 3.0s countdown,
+      bloom back to its start). Without the bloom reset, leaving at 0.1s
+      would buy another 3s of QTE hits. */
+  resetFocus(): void {
+    if (this.phase !== "focus") return;
+    this.tick = 0;
+    this.bloomDeg = this.bloomStartDeg;
+    this.taps = [];
+    this.misses = [];
+    this.tapCount = 0;
+    this.holdSec = 0;
+  }
+
   addHold(dtSec: number): void {
     if (this.phase !== "focus") return;
     this.holdSec += dtSec;
@@ -119,11 +152,17 @@ export class DuelMachine {
     return "prone";
   }
 
-  /** bullet spread sample: random point in bloom disc (seeded). */
+  /** bullet spread sample: random point in the bloom disc (seeded), biased
+      to the rim (user ask 2026-10-05): SPREAD_RIM_P of shots land in the
+      outer ring (SPREAD_INNER_R..1 of the radius), the rest in the middle,
+      each area-uniform. A uniform disc put 64% in the middle, so a big
+      crosshair still mostly hit dead centre. */
   sampleSpread(): { dx: number; dy: number } {
     const r = (this.bloomDeg * Math.PI) / 180;
     const a = this.rng() * Math.PI * 2;
-    const m = Math.sqrt(this.rng());
+    const u = this.rng();
+    const k = SPREAD_INNER_R;
+    const m = this.rng() < SPREAD_RIM_P ? Math.sqrt(k * k + u * (1 - k * k)) : k * Math.sqrt(u);
     return { dx: Math.cos(a) * r * m, dy: Math.sin(a) * r * m };
   }
 

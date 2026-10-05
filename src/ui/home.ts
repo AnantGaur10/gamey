@@ -4,7 +4,7 @@ import { createCowboy, type Cowboy } from "../render/cowboy";
 import { loadCowboyGlb, swapCowboy, type CowboyGlb } from "../render/cowboyGlb";
 import { loadStreetGlb, type StreetSet } from "../render/streetGlb";
 import { createGunsmoke } from "../render/smoke";
-import { createFixedStepper, STEP } from "../game/fixedStep";
+import { createFixedStepper, STEP, MAX_FRAME_DT } from "../game/fixedStep";
 import { createRagdoll, bindAccessories, type Ragdoll } from "../render/ragdoll";
 import { DuelMachine, type WoundPose } from "../game/DuelMachine";
 import { bodyDamage, BASE_HP, LIFESTEAL_CAP_PER_HIT } from "../game/damage";
@@ -13,6 +13,7 @@ import { ProjectileSim, testCapsuleHit, CAPSULE_FOR_POSE, capsuleMid, type Bulle
 import { LocalTransport } from "../game/Transport";
 import type { PortalAdapter } from "../portal/PortalAdapter";
 import { mountFocusUI, isCoarsePointer, type FocusUI } from "./focus";
+import { TimingQte } from "../game/timingQte";
 import { storagePersisted } from "../store/SafeStore";
 import { createAudioManager, type AudioManager } from "../audio/AudioManager";
 
@@ -81,7 +82,7 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
     <button class="primary" data-m="standard">STANDARD — BEST OF ${BEST_OF}</button>
     <button data-m="deathmatch">DEATHMATCH — STREAK</button>
     <button data-m="shop">SHOP</button>
-    <div class="note">Holster first, then TAP pads (touch) or mash Space/Enter (PC) to shrink bloom. DRAW! → aim → fire. Headshot kills instantly.</div>
+    <div class="note">Holster first, then hit Space/Enter (PC) or tap (touch) when the moving line is in the gold, as many times as you can, to shrink bloom. Leaving the holster restarts the countdown. DRAW! → aim → fire. Headshot kills instantly.</div>
   </div>`);
   
   // Mute button (top-right)
@@ -423,6 +424,16 @@ function runDuel(
     focusPerTapDeg: gun.focusPerTapDeg,
     duelDistM: distM,
   });
+  // Focus timing QTE: advanced on the fixed clock, judged at the time the
+  // player actually saw (last render alpha + wall time since that frame).
+  const qte = new TimingQte(machine.seed);
+  let qteAlpha = 0;
+  let qteFrameMs = performance.now();
+  let focusEngaged = true;
+  /** Seconds past the last fixed tick right now: render alpha + wall time
+      since that frame, capped at what the next frame could advance. */
+  const qteExtra = () =>
+    machine.paused ? 0 : Math.min(MAX_FRAME_DT, qteAlpha * STEP + (performance.now() - qteFrameMs) / 1000);
 
   // Wound-pose targets (group-level: feet stay planted, no locomotion).
   // pitch = forward lean toward the foe (YXZ order: local +Z faces the foe
@@ -537,6 +548,14 @@ function runDuel(
       wounds: () => ({ player: playerWound, playerHits: playerWounds, foe: foeWound, foeHits: foeWounds }),
       capsule: (side: "player" | "foe") => CAPSULE_FOR_POSE[side === "player" ? playerWound : foeWound],
       roll: (n: number) => machine.rollWound(n),
+      /** Focus QTE readout: needle as rendered right now + zone + tallies. */
+      qte: () => ({
+        needle: qte.peek(qteExtra()),
+        zoneC: qte.zoneC, zoneW: qte.zoneW, perfectW: qte.perfectW, frozen: qte.frozen,
+        hits: qte.hits, misses: qte.misses, streak: qte.streak,
+        phase: machine.phase, paused: machine.paused, bloom: machine.bloomDeg,
+        secsLeft: machine.focusTicksLeft() / 60,
+      }),
       /** Look-dev: force round i's time of day + street glow; hell=true
           also drops the hell set in (street captures, not gameplay). */
       tod: (i: number, hell = false) => {
@@ -872,8 +891,8 @@ function runDuel(
   function beginFocus(): void {
     if (machine.phase !== "ready") return;
     machine.startFocus();
-    cue.textContent = "TAP! 3.0s";
-    sub.textContent = coarse ? "Pads shrink the circle · outside grows it" : "SPACE / ENTER mash · don't click";
+    cue.textContent = "FOCUS! 3.0s";
+    sub.textContent = coarse ? "Tap when the line is in the gold" : "SPACE / ENTER when the line is in the gold · don't click";
     cross.style.display = "block";
     adapter.gameplayStart();
   }
@@ -1446,17 +1465,20 @@ function runDuel(
     }
   }
 
-  const focusUI: FocusUI = mountFocusUI(root, {
-    onTap: (pad) => {
-      machine.addTap(machine.tick, pad);
-    },
-    onMiss: () => {
-      machine.addMiss();
-      cross.classList.add("penalty");
-      window.setTimeout(() => cross.classList.remove("penalty"), 180);
-    },
-    onHold: (dt) => machine.addHold(dt),
-  });
+  function focusPenalty(): void {
+    cross.classList.add("penalty");
+    window.setTimeout(() => cross.classList.remove("penalty"), 180);
+  }
+  function qtePress(): void {
+    if (machine.phase !== "focus" || machine.paused) return;
+    const res = qte.press(qteExtra());
+    if (!res) return; // still showing the last result
+    machine.addQte(res);
+    focusUI.flash(res);
+    if (res === "miss") focusPenalty();
+  }
+  const focusUI: FocusUI = mountFocusUI(root, { onPress: qtePress });
+  focusUI.render({ needle: qte.pos, zoneC: qte.zoneC, zoneW: qte.zoneW, perfectW: qte.perfectW, streak: 0 });
 
   // ---- input routing ----
   const touchDown = new Map<number, { x: number; y: number; t: number; moved: boolean }>();
@@ -1475,8 +1497,6 @@ function runDuel(
   const onPointerDown = (e: PointerEvent) => {
     const t = e.target as HTMLElement;
     if (t.closest?.("button")) return;
-    if (t.closest?.(".pad")) return; // focus.ts owns pads
-    if (t.closest?.(".keybar")) return;
     const zx = e.clientX;
     const zy = e.clientY;
     pointerPx.x = zx;
@@ -1491,9 +1511,14 @@ function runDuel(
       return;
     }
     if (machine.phase === "focus") {
-      machine.addMiss(); // taps outside pads grow bloom (locked)
-      cross.classList.add("penalty");
-      window.setTimeout(() => cross.classList.remove("penalty"), 180);
+      // Touch: any tap is a QTE press. PC: the press is Space/Enter; a
+      // click is a miss (grows bloom), the mouse belongs in the holster.
+      if (coarse) qtePress();
+      else {
+        machine.addMiss();
+        focusUI.flash("miss");
+        focusPenalty();
+      }
       return;
     }
     // draw / fire
@@ -1647,6 +1672,7 @@ function runDuel(
     // delta-time not frame count). Rendering interpolates by alpha below.
     const alpha = stepper.advance(dt, () => {
       machine.step(STEP);
+      if (machine.phase === "focus" && !machine.paused) qte.advance(STEP);
       // Bloom after DRAW: holding without firing regrows it (locked 09-26
       // §1); once shooting, recoil recovery rewards pacing. Neither runs in
       // ready/focus: free shrink there drifted the crosshair gap + keybar
@@ -1670,6 +1696,8 @@ function runDuel(
       else if (playerDoll?.fallen) playerDoll.sync(alpha);
     } catch { /* noop */ }
     renderBullets(alpha);
+    qteAlpha = alpha;
+    qteFrameMs = performance.now();
     try { (player as unknown as CowboyGlb).update?.(dt); } catch { /* noop */ }
     try { (foe as unknown as CowboyGlb).update?.(dt); } catch { /* noop */ }
     // idle sway (procedural no-op path mirrors Blender idle clip) with a
@@ -1718,18 +1746,31 @@ function runDuel(
     if (!playerDoll?.fallen && playerHP > 0) player.group.position.y = playerDrop + Math.sin(swayT * 2.1 + 1.3) * 0.012 - playerDip;
 
     if (machine.phase === "focus") {
-      // PC: countdown only runs while the pointer stays in the holster zone.
-      // Touch: committed once started (no hover to track).
+      // PC: the countdown only runs while the pointer stays in the holster
+      // zone; leaving it restarts the whole Focus (3.0s, bloom, QTE) on
+      // return (user ask 2026-10-05). Touch: committed once started.
       const engaged = coarse || inZone(pointerPx.x, pointerPx.y);
+      if (!engaged && focusEngaged) {
+        machine.resetFocus();
+        qte.reset();
+      }
+      focusEngaged = engaged;
       machine.paused = !engaged;
       if (machine.paused) {
         cue.textContent = "⏸ HOLSTER!";
-        sub.textContent = coarse ? "Pads shrink · outside grows" : "Back INTO the holster zone!";
+        sub.textContent = "Back INTO the holster zone · the countdown restarts";
       } else {
         const left = machine.focusTicksLeft() / 60;
-        cue.textContent = `TAP! ${left.toFixed(1)}s`;
-        sub.textContent = coarse ? "Pads shrink · outside grows" : "Stay holstered · SPACE / ENTER mash · don't click";
+        cue.textContent = `FOCUS! ${left.toFixed(1)}s`;
+        sub.textContent = coarse ? "Tap when the line is in the gold" : "SPACE / ENTER when the line is in the gold · don't click";
       }
+      focusUI.render({
+        needle: qte.peek(machine.paused ? 0 : alpha * STEP), // out of the holster: frozen
+        zoneC: qte.zoneC,
+        zoneW: qte.zoneW,
+        perfectW: qte.perfectW,
+        streak: qte.streak,
+      });
       focusUI.setProgress(1 - (machine.bloomDeg - gun.bloomMinDeg) / (gun.bloomStartDeg - gun.bloomMinDeg));
       // Crosshair lives where the pointer is — never pinned to the foe.
       // Aim itself stays parked (gun down) until DRAW.

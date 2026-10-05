@@ -31,7 +31,7 @@ async function parkInHolster(page: Page): Promise<void> {
   expect(z).not.toBeNull();
   await page.mouse.move(z!.x + z!.width / 2, z!.y + z!.height / 2);
   await page.waitForFunction(
-    () => (document.querySelector('.cue')?.textContent ?? '').includes('TAP'),
+    () => (document.querySelector('.cue')?.textContent ?? '').includes('FOCUS'),
     { timeout: 8000 },
   );
 }
@@ -43,11 +43,28 @@ async function waitDraw(page: Page): Promise<void> {
   );
 }
 
-async function tapSpace(page: Page, n: number): Promise<void> {
-  for (let i = 0; i < n; i++) {
-    await page.keyboard.press('Space');
-    await page.waitForTimeout(110);
-  }
+// Focus QTE: press Space (the real window keydown path) only while the
+// needle is well inside the gold zone. Reads the DEV __gamey.qte() probe
+// every 4ms (the needle is time-continuous), so it never presses a miss.
+async function qteHits(page: Page, n: number): Promise<number> {
+  return page.evaluate((want) => new Promise<number>((resolve) => {
+    type Q = { needle: number; zoneC: number; zoneW: number; frozen: boolean; hits: number; phase: string; paused: boolean };
+    const g = (window as unknown as { __gamey: { qte(): Q } }).__gamey;
+    const start = g.qte().hits;
+    const t0 = performance.now();
+    const loop = () => {
+      const q = g.qte();
+      if (q.hits - start >= want || q.phase !== 'focus' || performance.now() - t0 > 8000) {
+        resolve(q.hits - start);
+        return;
+      }
+      if (!q.frozen && !q.paused && Math.abs(q.needle - q.zoneC) < (q.zoneW / 2) * 0.6) {
+        window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }));
+      }
+      setTimeout(loop, 4);
+    };
+    loop();
+  }), n);
 }
 
 async function aimBody(page: Page): Promise<{ x: number; y: number }> {
@@ -79,7 +96,7 @@ test.describe('Gamey - Wounds', () => {
     await page.waitForLoadState('networkidle');
     await page.waitForSelector('.readyzone', { timeout: 8000 });
     await parkInHolster(page);
-    await tapSpace(page, 10);
+    await qteHits(page, 3);
     await waitDraw(page);
     await page.waitForTimeout(1200);
     type G = { __gamey: {
@@ -123,7 +140,7 @@ test.describe('Gamey - Wounds', () => {
   test('first body wound poses the foe (bend or crouch)', { timeout: 150000 }, async ({ page }) => {
     await startStandard(page);
     await parkInHolster(page);
-    await tapSpace(page, 6);
+    await qteHits(page, 3);
     await waitDraw(page);
     // Up to 6 body shots; stop at the first damaging (non-lethal) hit.
     let wounded = false;
@@ -149,7 +166,7 @@ test.describe('Gamey - Wounds', () => {
   test('capsule follows the wound (lowered hitbox)', { timeout: 150000 }, async ({ page }) => {
     await startStandard(page);
     await parkInHolster(page);
-    await tapSpace(page, 6);
+    await qteHits(page, 3);
     await waitDraw(page);
     for (let i = 0; i < 6; i++) {
       const hp = await foeHP(page);
@@ -174,7 +191,7 @@ test.describe('Gamey - Wounds', () => {
   test('prone duelists keep fighting both ways (forced prone)', { timeout: 150000 }, async ({ page }) => {
     await startStandard(page);
     await parkInHolster(page);
-    await tapSpace(page, 6);
+    await qteHits(page, 3);
     await waitDraw(page);
     // Force the foe prone: capsule drops, and the player can still hit it
     // (center-screen body aim stays inside the low capsule). The capsule
@@ -217,7 +234,7 @@ test.describe('Gamey - Wounds', () => {
   test('wounds reset when the next round starts', { timeout: 150000 }, async ({ page }) => {
     await startStandard(page);
     await parkInHolster(page);
-    await tapSpace(page, 6);
+    await qteHits(page, 3);
     await waitDraw(page);
     // Play round 1 out (either side may win — the foe shoots back). Stop
     // firing once the round resolves.

@@ -11,6 +11,7 @@ import * as THREE from "three";
 import { createRagdoll, type RagdollParts } from "../src/render/ragdoll";
 import { createFixedStepper, STEP } from "../src/game/fixedStep";
 import { ProjectileSim } from "../src/game/projectiles";
+import { TimingQte } from "../src/game/timingQte";
 
 let failures = 0;
 const ok = (cond: boolean, msg: string) => { if (!cond) { failures++; console.log(`  ✗ ${msg}`); } else console.log(`  ✓ ${msg}`); };
@@ -144,6 +145,26 @@ console.log("== bullets ==");
     }
     ok(maxErr < 0.01, `${hz}Hz: rendered bullet matches the fixed-step curve (max err ${(maxErr * 100).toFixed(2)}cm < 1cm)`);
     ok(minStep > 0 && maxStep / minStep < 1.15, `${hz}Hz: per-frame bullet step even (max/min ${(maxStep / minStep).toFixed(2)}), no hops/stalls`);
+  }
+}
+
+console.log("== focus QTE needle ==");
+{
+  // The needle advances only on the fixed clock and renders at peek(alpha *
+  // STEP), so at wall time t it must sit exactly on the ping-pong curve of t
+  // at every refresh rate (what you see = what gets judged).
+  const T = new TimingQte(42).traverseSec;
+  const curve = (t: number) => { const x = (t / T) % 2; return x <= 1 ? x : 2 - x; };
+  for (const hz of [30, 60, 144, 165, 240]) {
+    const q = new TimingQte(42);
+    const st = createFixedStepper();
+    let t = 0, maxErr = 0;
+    while (t < 2.0 - 1e-9) {
+      t += 1 / hz;
+      const alpha = st.advance(1 / hz, () => q.advance(STEP));
+      maxErr = Math.max(maxErr, Math.abs(q.peek(alpha * STEP) - curve(t)));
+    }
+    ok(maxErr < 1e-6, `${hz}Hz: rendered needle on the fixed-clock curve (max err ${maxErr.toExponential(1)})`);
   }
 }
 

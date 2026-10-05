@@ -74,7 +74,11 @@ class AIGameController {
 
   async enterHolsterZone(): Promise<void> {
     console.log('\n🖱️ ACTION: Enter holster zone to start countdown');
-    const holster = await this.page.locator('.readyzone').boundingBox();
+    // Round transitions rebuild the DOM: re-query until a live zone answers.
+    let holster: { x: number; y: number; width: number; height: number } | null = null;
+    for (let i = 0; i < 10 && !holster; i++) {
+      holster = await this.page.locator('.readyzone').boundingBox({ timeout: 1000 }).catch(() => null);
+    }
     if (holster) {
       await this.page.mouse.move(holster.x + holster.width / 2, holster.y + holster.height / 2);
       await this.page.waitForTimeout(300);
@@ -85,23 +89,45 @@ class AIGameController {
     }
   }
 
+  /** Focus timing QTE: press Space while the needle is in the gold zone,
+      chaining up to `count` hits before DRAW (reads the DEV __gamey probe,
+      presses through the real window keydown path). */
   async focusTaps(count: number): Promise<void> {
-    console.log(`\n⌨️ ACTION: Press SPACE ${count} times to shrink bloom`);
-    for (let i = 0; i < count; i++) {
-      await this.page.keyboard.press('Space');
-      await this.page.waitForTimeout(100);
-      if ((i + 1) % 3 === 0) {
-        const state = await this.getGameState();
-        console.log(`   Tap ${i + 1}/${count} - bloom now ${Math.round(state.bloomSize || 0)}px`);
-      }
-    }
+    console.log(`\n⌨️ ACTION: Time SPACE into the gold zone (up to ${count} hits)`);
+    const r = await this.page.evaluate((want) => new Promise<{ hits: number; misses: number }>((resolve) => {
+      type Q = { needle: number; zoneC: number; zoneW: number; frozen: boolean; hits: number; misses: number; phase: string; paused: boolean };
+      const g = (window as unknown as { __gamey?: { qte(): Q } }).__gamey;
+      if (!g) { resolve({ hits: 0, misses: 0 }); return; }
+      const t0 = performance.now();
+      const loop = () => {
+        const q = g.qte();
+        if (q.hits >= want || q.phase !== 'focus' || performance.now() - t0 > 8000) {
+          resolve({ hits: q.hits, misses: q.misses });
+          return;
+        }
+        if (!q.frozen && !q.paused && Math.abs(q.needle - q.zoneC) < (q.zoneW / 2) * 0.6) {
+          window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }));
+        }
+        setTimeout(loop, 4);
+      };
+      loop();
+    }), count);
+    const state = await this.getGameState();
+    console.log(`   QTE hits ${r.hits}, misses ${r.misses} - bloom now ${Math.round(state.bloomSize || 0)}px`);
     await this.observe('focus-complete');
     await this.reportState();
   }
 
   async waitForDraw(): Promise<void> {
     console.log('\n⏳ ACTION: Wait for DRAW phase');
-    await this.page.waitForTimeout(3500);
+    // Any post-Focus state: on slow software GL the round can already be
+    // resolving (cue past DRAW!, or a result screen) by the time we poll.
+    await this.page.waitForFunction(
+      () => !/FOCUS|HOLSTER/.test(document.querySelector('.cue')?.textContent ?? 'gone'),
+      undefined,
+      { timeout: 15000 },
+    );
+    await this.page.waitForTimeout(300);
     await this.observe('draw-triggered');
     await this.reportState();
   }
@@ -178,7 +204,7 @@ class AIGameController {
         hudExists: !!document.querySelector('.hud'),
         crosshairExists: !!document.querySelector('.crosshair'),
         cylinderExists: !!document.querySelector('.cylinder'),
-        padsExist: document.querySelectorAll('.pad').length,
+        qteBarExists: !!document.querySelector('.qte .qtrack'),
         buttonsExist: document.querySelectorAll('button').length,
       };
     });
@@ -233,6 +259,9 @@ function parseViewport(): { width: number; height: number; label: string } {
   });
 
   const page = await context.newPage();
+  // tsx/esbuild wraps named functions inside page.evaluate callbacks in a
+  // __name() helper that only exists in Node: define a no-op in the page.
+  await page.addInitScript('window.__name = (f) => f;');
   const ai = new AIGameController(page);
 
   const errors: string[] = [];
@@ -241,6 +270,9 @@ function parseViewport(): { width: number; height: number; label: string } {
       errors.push(msg.text());
       console.error(`❌ Console: ${msg.text()}`);
     }
+  });
+  page.on('response', (r) => {
+    if (r.status() >= 400) console.error(`❌ HTTP ${r.status()} ${r.url()}`);
   });
   page.on('pageerror', (err) => {
     errors.push(err.message);
@@ -287,7 +319,13 @@ function parseViewport(): { width: number; height: number; label: string } {
     console.log('\n🔄 Attempting second round (if available)...');
     await page.waitForTimeout(1000);
     
-    const holsterStillExists = await page.locator('.readyzone').isVisible().catch(() => false);
+    // The next round's runDuel rebuilds the DOM: wait for ITS holster cue
+    // instead of racing the old round's zone.
+    const holsterStillExists = await page.waitForFunction(
+      () => (document.querySelector('.cue')?.textContent ?? '').includes('HOLSTER UP'),
+      undefined,
+      { timeout: 15000 },
+    ).then(() => true).catch(() => false);
     if (holsterStillExists) {
       console.log('✓ Next round started automatically');
       await ai.enterHolsterZone();
@@ -321,8 +359,8 @@ function parseViewport(): { width: number; height: number; label: string } {
 
   } catch (err: any) {
     console.error(`\n❌ TEST FAILED: ${err.message}`);
-    await ai.observe('error-state');
-    await ai.diagnose();
+    await ai.observe('error-state').catch(() => {});
+    await ai.diagnose().catch(() => {});
   } finally {
     await context.close();
     await browser.close();

@@ -1,21 +1,34 @@
-// Focus input split by device (locked 2026-09-26 §9):
-// - Touch (coarse pointer): two bottom-corner pads, pointer tracked.
-// - PC (fine pointer): NO pads. Centered "MASH SPACE / ENTER" key bar with
-//   a live fill showing bloom-shrink progress. Mouse does zero focus work.
-// Keyboard Space/Enter always active on both (re-press = tap, hold = slow
-// shrink). Taps outside pads during focus = miss (boot routes it).
+// Focus input: timing QTE (user ask 2026-10-05, replaces Space mashing and
+// the touch tap pads). A needle ping-pongs across a bar; stop it in the gold
+// zone. Every hit spawns a new, narrower zone; chain as many as you can
+// before DRAW. Logic lives in src/game/timingQte.ts; this file only draws it.
+// - PC: Space / Enter presses (key repeat ignored). Mouse clicks are a miss
+//   (home.ts routes them; the mouse stays in the holster).
+// - Touch: a tap anywhere outside the holster presses (home.ts routes it).
+
+import type { QteResult } from "../game/timingQte";
 
 export interface FocusHandlers {
-  onTap(pad: "left" | "right" | "key"): void;
-  onMiss(): void;
-  onHold(dtSec: number): void;
+  onPress(): void;
+}
+
+export interface QteView {
+  needle: number;
+  zoneC: number;
+  zoneW: number;
+  perfectW: number;
+  streak: number;
 }
 
 export interface FocusUI {
   destroy(): void;
-  /** 0..1 shrink progress for the PC key-bar fill. No-op on touch. */
+  /** 0..1 bloom-shrink progress (slim line under the bar). */
   setProgress(f: number): void;
-  /** Hide pads/bar at DRAW (aim takes over). */
+  /** Needle + zone, every rendered frame. */
+  render(v: QteView): void;
+  /** One-shot result flash. */
+  flash(res: QteResult): void;
+  /** Hide at DRAW (aim takes over). */
   setVisible(v: boolean): void;
 }
 
@@ -27,85 +40,66 @@ export function isCoarsePointer(): boolean {
   }
 }
 
+const RESULT_TEXT: Record<QteResult, string> = { perfect: "PERFECT!", good: "GOOD", miss: "MISS" };
+
 export function mountFocusUI(root: HTMLElement, h: FocusHandlers): FocusUI {
   const coarse = isCoarsePointer();
-  const cleanups: Array<() => void> = [];
-  const shown: HTMLElement[] = [];
-  let fill: HTMLElement | null = null;
-
-  if (coarse) {
-    const left = document.createElement("div");
-    left.className = "pad left";
-    left.innerHTML = "TAP<small>thumb</small>";
-    const right = document.createElement("div");
-    right.className = "pad right";
-    right.innerHTML = "TAP<small>thumb</small>";
-    root.append(left, right);
-    shown.push(left, right);
-
-    const press = (el: HTMLElement, pad: "left" | "right") => {
-      el.classList.add("active");
-      h.onTap(pad);
-      window.setTimeout(() => el.classList.remove("active"), 90);
-    };
-    const onL = (e: PointerEvent) => {
-      e.preventDefault();
-      press(left, "left");
-    };
-    const onR = (e: PointerEvent) => {
-      e.preventDefault();
-      press(right, "right");
-    };
-    left.addEventListener("pointerdown", onL);
-    right.addEventListener("pointerdown", onR);
-    cleanups.push(() => {
-      left.removeEventListener("pointerdown", onL);
-      right.removeEventListener("pointerdown", onR);
-    });
-  } else {
-    const bar = document.createElement("div");
-    bar.className = "keybar";
-    bar.innerHTML =
-      `<span class="klabel">MASH <b>SPACE</b> / <b>ENTER</b> TO FOCUS</span>` +
-      `<span class="ktrack"><span class="kfill"></span></span>`;
-    root.appendChild(bar);
-    shown.push(bar);
-    fill = bar.querySelector(".kfill") as HTMLElement;
-  }
+  const bar = document.createElement("div");
+  bar.className = "qte";
+  bar.innerHTML =
+    `<span class="qlabel">${coarse ? "<b>TAP</b>" : "<b>SPACE</b>"} ON THE GOLD · CHAIN HITS</span>` +
+    `<span class="qtrack"><span class="qzone"><span class="qperfect"></span></span><span class="qneedle"></span></span>` +
+    `<span class="qinfo"><span class="qres"></span><span class="qstreak"></span></span>` +
+    `<span class="qprog"><span class="qfill"></span></span>`;
+  root.appendChild(bar);
+  const zoneEl = bar.querySelector(".qzone") as HTMLElement;
+  const perfEl = bar.querySelector(".qperfect") as HTMLElement;
+  const needleEl = bar.querySelector(".qneedle") as HTMLElement;
+  const resEl = bar.querySelector(".qres") as HTMLElement;
+  const streakEl = bar.querySelector(".qstreak") as HTMLElement;
+  const fill = bar.querySelector(".qfill") as HTMLElement;
+  let flashTimer = 0;
 
   const onKey = (e: KeyboardEvent) => {
-    if (e.code === "Space" || e.code === "Enter") {
-      if (e.repeat) {
-        h.onHold(1 / 60);
-        return;
-      }
-      e.preventDefault();
-      h.onTap("key");
-      if (fill) {
-        fill.classList.add("pulse");
-        window.setTimeout(() => fill && fill.classList.remove("pulse"), 90);
-      }
-    }
+    if (e.code !== "Space" && e.code !== "Enter") return;
+    e.preventDefault();
+    if (e.repeat) return; // holding is not timing
+    h.onPress();
   };
   window.addEventListener("keydown", onKey);
-  cleanups.push(() => window.removeEventListener("keydown", onKey));
 
-  const onTouch = (e: TouchEvent) => {
-    if ((e.target as HTMLElement).closest?.(".pad")) e.preventDefault();
-  };
-  document.addEventListener("touchstart", onTouch, { passive: false });
-  cleanups.push(() => document.removeEventListener("touchstart", onTouch));
-
+  const pct = (f: number) => `${(Math.min(1, Math.max(0, f)) * 100).toFixed(2)}%`;
   return {
     destroy() {
-      for (const c of cleanups) c();
-      for (const s of shown) s.remove();
+      window.removeEventListener("keydown", onKey);
+      window.clearTimeout(flashTimer);
+      bar.remove();
     },
     setProgress(f: number) {
-      if (fill) fill.style.width = `${Math.round(Math.min(1, Math.max(0, f)) * 100)}%`;
+      fill.style.width = pct(f);
+    },
+    render(v: QteView) {
+      zoneEl.style.left = pct(v.zoneC - v.zoneW / 2);
+      zoneEl.style.width = pct(v.zoneW);
+      const pw = v.perfectW / v.zoneW;
+      perfEl.style.left = pct((1 - pw) / 2);
+      perfEl.style.width = pct(pw);
+      needleEl.style.left = pct(v.needle);
+      streakEl.textContent = v.streak > 1 ? `x${v.streak}` : "";
+    },
+    flash(res: QteResult) {
+      resEl.textContent = RESULT_TEXT[res];
+      bar.classList.remove("hit-perfect", "hit-good", "hit-miss");
+      void bar.offsetWidth; // restart the CSS flash
+      bar.classList.add(`hit-${res}`);
+      window.clearTimeout(flashTimer);
+      flashTimer = window.setTimeout(() => {
+        resEl.textContent = "";
+        bar.classList.remove("hit-perfect", "hit-good", "hit-miss");
+      }, 420);
     },
     setVisible(v: boolean) {
-      for (const s of shown) s.classList.toggle("hidden", !v);
+      bar.classList.toggle("hidden", !v);
     },
   };
 }
