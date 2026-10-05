@@ -26,9 +26,9 @@ const MISS_GROW_DEG = 0.25;
 const POST_DRAW_REGROW_DEG_PER_SEC = 0.5;
 const MAX_TAPS_PER_SEC = 12;
 // Timing-QTE focus (2026-10-05): a hit shrinks bloom by focusPerTapDeg x
-// these. ~5 perfect hits in the 3s window (~8-10 attempts fit) reach
-// bloomMin (range ~1.8°); a miss costs MISS_GROW_DEG like the old
-// outside-pad tap.
+// these: PERFECT -0.36° (15% of the 2.4° start), GOOD -0.24° (10%). ~7
+// perfect hits reach the 0.12° bloomMin; a miss costs MISS_GROW_DEG like
+// the old outside-pad tap.
 const QTE_PERFECT_MULT = 1.2;
 const QTE_GOOD_MULT = 0.8;
 const SPREAD_RIM_P = 0.7; // share of shots in the outer ring of the bloom

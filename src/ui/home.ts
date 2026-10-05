@@ -787,7 +787,7 @@ function runDuel(
     cross.style.top = `${cy - rr.top}px`;
     cross.style.transform = "translate(-50%, -50%)";
     // Bloom drives the line gap (radius), never a ring: classic lines+dot.
-    cross.style.setProperty("--gap", `${Math.max(13, crossPx() / 2)}px`);
+    cross.style.setProperty("--gap", `${Math.max(4, crossPx() / 2)}px`);
   }
 
   function paintBars(): void {
@@ -837,7 +837,7 @@ function runDuel(
   function crossPx(): number {
     const toAim = camera.position.distanceTo(aimWorld);
     const worldR = Math.tan((machine.bloomDeg * Math.PI) / 180) * toAim;
-    return Math.max(26, (2 * worldR) / worldPerPx());
+    return Math.max(8, (2 * worldR) / worldPerPx()); // low floor: the 0.12° min bloom must still read smaller
   }
 
   // Aim plane through the foe, facing the camera; clamped to a reach box.

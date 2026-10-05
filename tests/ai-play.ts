@@ -133,7 +133,8 @@ class AIGameController {
   }
 
   async aimAt(target: 'head' | 'body' | 'miss-left' | 'miss-right'): Promise<{ x: number; y: number } | null> {
-    const canvas = await this.page.locator('canvas').boundingBox();
+    // Round may already be over (result screen, no canvas): skip, don't hang.
+    const canvas = await this.page.locator('canvas').boundingBox({ timeout: 2000 }).catch(() => null);
     if (!canvas) return null;
 
     const centerX = canvas.x + canvas.width / 2;
