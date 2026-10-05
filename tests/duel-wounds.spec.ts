@@ -1,7 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 
 // Wound lottery assertions (locked 2026-10-02): taken hits produce persistent
-// bend/crouch/prone poses, the capsule follows the pose, wounds reset per
+// lunge (crouch)/prone poses (bend is forceable, never rolled), the capsule follows the pose, wounds reset per
 // duel. Reads the DEV-only window.__gamey probe (zero prod surface).
 
 interface Wounds {
@@ -120,7 +120,7 @@ test.describe('Gamey - Wounds', () => {
     }
   });
 
-  test('lottery: hit 1 never prone, hit 0 always none', { timeout: 150000 }, async ({ page }) => {
+  test('lottery: hit 1 always lunge, hit 2+ lunge or prone, never bend', { timeout: 150000 }, async ({ page }) => {
     await startStandard(page);
     await parkInHolster(page);
     const r = await page.evaluate(() => {
@@ -132,12 +132,14 @@ test.describe('Gamey - Wounds', () => {
       return { zero: g.roll(0), one, two };
     });
     expect(r.zero).toBe('none');
-    expect(r.one.every((w) => w === 'bend' || w === 'crouch')).toBe(true);
-    expect(r.two.every((w) => w === 'bend' || w === 'crouch' || w === 'prone')).toBe(true);
-    expect(r.two).toContain('prone'); // 25% over 400 draws: essentially certain
+    // User 2026-10-05: only the lunge (crouch) and prone are rolled.
+    expect(r.one.every((w) => w === 'crouch')).toBe(true);
+    expect(r.two.every((w) => w === 'crouch' || w === 'prone')).toBe(true);
+    expect(r.two).toContain('crouch'); // 60/40 over 400 draws: essentially certain
+    expect(r.two).toContain('prone');
   });
 
-  test('first body wound poses the foe (bend or crouch)', { timeout: 150000 }, async ({ page }) => {
+  test('first body wound poses the foe (lunge)', { timeout: 150000 }, async ({ page }) => {
     await startStandard(page);
     await parkInHolster(page);
     await qteHits(page, 3);
@@ -155,7 +157,7 @@ test.describe('Gamey - Wounds', () => {
     const w = await wounds(page);
     if (wounded) {
       expect(w.foeHits).toBe(1);
-      expect(['bend', 'crouch']).toContain(w.foe);
+      expect(w.foe).toBe('crouch');
     } else {
       // Foe died before a non-lethal hit landed — wounds correctly untouched.
       expect(await foeHP(page)).toBeLessThanOrEqual(0);

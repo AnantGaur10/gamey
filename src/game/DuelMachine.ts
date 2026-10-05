@@ -6,8 +6,9 @@
 export type DuelPhase = "ready" | "intro" | "focus" | "draw" | "fire" | "resolve";
 
 /** Persistent wound pose from taken hits (locked 2026-10-02): duelists stay
-    rooted (no locomotion) but react — bend/crouch on hit 1, prone unlocks at
-    hit 2+. Rolls use the seeded RNG, so poses are deterministic per seed. */
+    rooted (no locomotion) but react — crouch (lunge) on hit 1, prone unlocks
+    at hit 2+. `bend` is never rolled (kept for forcing/debug). Rolls use the
+    seeded RNG, so poses are deterministic per seed. */
 export type WoundPose = "none" | "bend" | "crouch" | "prone";
 
 export interface FocusTap {
@@ -141,15 +142,15 @@ export class DuelMachine {
     this.bloomDeg = Math.min(this.bloomMaxDeg, this.bloomDeg + MISS_GROW_DEG);
   }
 
-  /** wound lottery: hit 1 unlocks bend/crouch 50-50; hit 2+ adds prone
-      at 25% (bend 40 / crouch 35). Tunable weights, not locked balance. */
+  /** wound lottery (user 2026-10-05: lunge + prone only, bend is never
+      rolled but stays forceable): hit 1 always crouch (the lunge); hit 2+
+      crouch 60 / prone 40. One rng draw per call either way, so the seeded
+      sequence shared with sampleSpread keeps its shape. Tunable weights. */
   rollWound(hitsTaken: number): WoundPose {
     if (hitsTaken <= 0) return "none";
     const r = this.rng();
-    if (hitsTaken === 1) return r < 0.5 ? "bend" : "crouch";
-    if (r < 0.4) return "bend";
-    if (r < 0.75) return "crouch";
-    return "prone";
+    if (hitsTaken === 1) return "crouch";
+    return r < 0.6 ? "crouch" : "prone";
   }
 
   /** bullet spread sample: random point in the bloom disc (seeded), biased
