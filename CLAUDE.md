@@ -22,7 +22,7 @@ AGENTS.md holds the project rules (dual build, adapter gating, git workflow, com
 
 ## Commands (beyond AGENTS.md)
 - `npm run size:full` (50MB budget), `play`, `play:mobile`, `play:record`, `test:headed`.
-- `npm run test:physics` (in `npm test`): pure-Node check that a synthetic ragdoll + bullets are bit-identical at 30/60/120/144/165/240Hz and never stall a rendered frame. `npm run build:models`: regenerate GLBs (see Gotchas).
+- `npm run test:physics` (in `npm test`): pure-Node check that a synthetic ragdoll + bullets are bit-identical at 30/60/120/144/165/240Hz and never stall a rendered frame. `npm run build:models`: regenerate the cowboy GLBs; `npm run build:street`: regenerate `street.glb` (see Gotchas).
 - `ai:play*` needs the dev server on port 5174 and fetches `tsx` via `npx` (not a dependency).
 - Playwright specs in `tests/` (`duel-combat`, `duel-wounds`, `visual-duel`, ...) run against the dev server. They are NOT part of `npm test`, and `tests/` is not typechecked.
 - Playwright global timeout is 150s; per-test timeouts are ignored.
@@ -51,6 +51,7 @@ AGENTS.md holds the project rules (dual build, adapter gating, git workflow, com
 ## Gotchas
 - GLB export: apply modifiers, use active collection only. The loader culls named objects not starting with `H_` or `O_`. Models self-center. All GLB and ragdoll code must be null-safe with a procedural fallback.
 - Blender/GLBs: regenerate with `npm run build:models` (`scripts/blender/build_glbs.py`, headless, never saves `blender/cowboys.blend`). Do NOT hand-edit and save the .blend: NLA HOLD strips + save/reload do not round-trip rest-pose/pivot edits. Verify any new GLB by diffing ALL node TRS vs the previous good one (names, 28 anims, ~4.4k tris). Clip keys live in `CLIP_KEYS` in `build_glbs.py`, not the .blend. Live addon socket `127.0.0.1:9876` is for visual iteration only. Details: `context/2026-10-04.md` §5, §11.
+- Street set: `scripts/blender/build_street.py` is the ONLY source (byte-identical output per run; `blender/street_snapshot.blend` is a view-only copy, edits there never reach the GLB). Node contract with `streetGlb.ts`: `S_Paint` (static, vertex colours), `S_Glow` (material `M_Glow`, emissive driven by time of day), `A_*` pivoted parts animated by name (`A_BatL/R`, `A_SignWhiskey/Rooms`, `A_HorseHead/Tail`, `A_CatTail`, `A_Rocker`, `A_Laundry`, `A_Tumble`); renaming one silently freezes it. Colour = palette x Cycles AO x ray-cast sun shadow (`sun_shadow()`; the Cycles SHADOW bake is unbounded, never use it), clamped to 1. Street tris (~24k, 12 draw calls, ~1MB) have their own budget, separate from the 3-5k cowboy budget. `__gamey.tod(i, hell?)` (DEV) forces a round's time of day for look-dev captures. `context/2026-10-05.md` §4.
 - Clips that actually show: `idle` (until DRAW, then stopped for both duelists), `flinch` (released at `FLINCH_END`), `victory`/`defeat` (living duelists only, never a corpse). `fall_*` only plays if the ragdoll fails or a GLB loads post-mortem; `draw`/`cock` are never played. Procedural code owns the arms from DRAW: a looping clip rewrites `armR`/`elbowR` every mixer update and beats any chase.
 - Gun arm: `stabilizeArm` puts `armR` on a mount that cancels the body's wound pitch+roll, so arm angles are standing-frame at any pose (no per-pose arm compensation needed).
 - Ragdoll (`render/ragdoll.ts`): 10 bodies joined by `RagdollJoint` (ConeTwist with a fixed twist reference = the character's lateral axis; stock cannon twist refs start violated between non-aligned bodies and tore shoulder/elbow 0.3-0.5m). Cannon pivots are in the body's LOCAL frame (world offsets tore limbs apart); the forearm box excludes the gun; judge settle speed WITHOUT a CDP screencast (it slows the sim). `__gamey.jointErrors(side)` = physics pivot gaps; the round's `cleanup()` disposes the doll ~1.3-1.5s post-kill (visuals stay frozen), so read physics early. `context/2026-10-04.md` §7, §11.
@@ -60,6 +61,6 @@ AGENTS.md holds the project rules (dual build, adapter gating, git workflow, com
 - Shop prices (100/120/50) and best-of-3 are NOT user-locked.
 
 ## Known drift / open items
-- Tri budget blown (~14k vs 3-5k). Music/SFX, covers and preview videos are not made.
+- Cowboy tri budget blown (~14k vs 3-5k). Music/SFX, covers and preview videos are not made.
 - `context/2026-10-01.md` is referenced but missing.
 - `TESTING.md` lists only 3 of 5 specs. `scripts/smoke-probe.mjs` hardcodes port 5199. `test-output.log` is stale.

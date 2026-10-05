@@ -132,7 +132,8 @@ export function createArena(distM: number): {
   );
   ground.rotation.x = -Math.PI / 2;
   scene.add(ground);
-  const rutMat = new THREE.MeshBasicMaterial({ color: 0xb08c5a });
+  // Lit (not Basic): unlit ruts glowed as bright stripes at night / in hell.
+  const rutMat = new THREE.MeshLambertMaterial({ color: 0xb08c5a });
   const rutMid = pPos.clone().lerp(fPos, 0.5).addScaledVector(duelDir, 6);
   const rutPerp = new THREE.Vector3(-duelDir.z, 0, duelDir.x);
   const rutYaw = Math.atan2(duelDir.x, duelDir.z);
@@ -153,7 +154,9 @@ export function createArena(distM: number): {
     const mid0 = pPos.clone().lerp(fPos, 0.5);
     const skirt = new THREE.Mesh(
       new THREE.PlaneGeometry(600, 400),
-      new THREE.MeshLambertMaterial({ color: 0xd9b380 }),
+      // fog off: its rays travel far past the visible ground, so fog tinted
+      // it into a hard purple/red band under the street at night and in hell.
+      new THREE.MeshLambertMaterial({ color: 0xd9b380, fog: false }),
     );
     skirt.rotation.x = -Math.PI / 2;
     skirt.position.set(mid0.x, -5, mid0.z);

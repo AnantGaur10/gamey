@@ -537,6 +537,13 @@ function runDuel(
       wounds: () => ({ player: playerWound, playerHits: playerWounds, foe: foeWound, foeHits: foeWounds }),
       capsule: (side: "player" | "foe") => CAPSULE_FOR_POSE[side === "player" ? playerWound : foeWound],
       roll: (n: number) => machine.rollWound(n),
+      /** Look-dev: force round i's time of day + street glow; hell=true
+          also drops the hell set in (street captures, not gameplay). */
+      tod: (i: number, hell = false) => {
+        setTimeOfDay(timeOfDayForRound(hell ? 2 : i));
+        street?.setGlow(hell ? 1 : [0, 0.55, 1][Math.min(i, 2)]);
+        if (hell) void import("../render/hell").then((m) => m.enterHell(scene));
+      },
       /** Joint + group rotation readout (pose debug). */
       joints: (side: "player" | "foe") => {
         const c = side === "player" ? player : foe;

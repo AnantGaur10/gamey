@@ -587,10 +587,14 @@ def build():
     for s, nm in ((-1, "A_BatL"), (1, "A_BatR")):  # batwings, hinged on the jambs
         hx = dc + s * 0.73
         with into(bucket(nm, "M_Paint", (hx, yf + 0.02, 0.0))):
-            box((hx - s * 0.36, yf + 0.02, 1.42), (0.7, 0.05, 0.95), P["green"], skip=())
-            for k in range(5):
-                box((hx - s * (0.1 + k * 0.13), yf + 0.05, 1.42), (0.07, 0.02, 0.7), P["green_dk"], skip=("-y",))
-            box((hx - s * 0.36, yf + 0.05, 1.86), (0.7, 0.03, 0.08), P["gold"], skip=("-y",))
+            # short chest-high wings (0.98..1.62): dark doorway shows above and below
+            for zz in (1.02, 1.58):  # top / bottom rails
+                box((hx - s * 0.34, yf + 0.02, zz), (0.66, 0.05, 0.08), P["green_dk"], skip=())
+            for k in range(2):        # stiles
+                box((hx - s * (0.04 + k * 0.6), yf + 0.02, 1.3), (0.07, 0.05, 0.6), P["green_dk"], skip=())
+            for k in range(6):        # louvres, gaps between them show the dark room
+                box((hx - s * (0.12 + k * 0.088), yf + 0.02, 1.3), (0.05, 0.035, 0.48), P["green"], skip=())
+            box((hx - s * 0.34, yf + 0.05, 1.64), (0.66, 0.03, 0.04), P["gold"], skip=("-y",))
     for wx in (x0 + 1.25, x1 - 1.05):
         window(wx, 0.95, 1.2, 1.45, yf, P["green_dk"], panes=(2, 3), curtain=P["curtain"])
     for wx in (x0 + 1.3, dc, x1 - 1.2):
@@ -686,7 +690,7 @@ def build():
     box((5.05, -4.6, 1.1), (1.0, 1.0, 2.2), jit(P["wood_gray"], 0.05), skip=("-z",))
     box((5.05, -4.05, 2.28), (1.2, 1.2, 0.08), P["wood_dk"], rot=(0.2, 0, 0))
     box((5.05, -4.08, 1.0), (0.6, 0.04, 1.8), jit(P["wood_mid"], 0.05), skip=("-z", "-y"))
-    text("C", 5.05, -4.05, 1.65, 0.16, P["interior"])  # crescent moon
+    crescent(5.05, -4.055, 1.62, 0.12, P["interior"])  # moon cut-out
     # street lamp on the boardwalk edge
     cyl((5.05, 2.0, 0.32), 0.06, 2.55, 6, P["iron"])
     box((5.05, 2.0, 0.36), (0.2, 0.2, 0.08), P["iron"])
@@ -789,6 +793,20 @@ def star(cx, y, cz, r):
     c = (cx, y + 0.03, cz)
     for i in range(10):
         face((pts[(i + 1) % 10], pts[i], c), P["gold"])
+
+def crescent(cx, y, cz, r, col, n=10):
+    """Crescent moon facing +y: left half-disc minus a narrower half-ellipse,
+    built as a strip so the tips close cleanly (no concave n-gon)."""
+    outer = [(cx - r * math.sin(math.pi * i / n), y, cz + r * math.cos(math.pi * i / n)) for i in range(n + 1)]
+    inner = [(cx - 0.4 * r * math.sin(math.pi * i / n), y, cz + r * math.cos(math.pi * i / n))
+             for i in range(n + 1)]
+    for i in range(n):  # clockwise in (x, z) = facing +y (same as star())
+        if i == 0:
+            face((inner[1], outer[1], outer[0]), col)
+        elif i == n - 1:
+            face((outer[i + 1], outer[i], inner[i]), col)
+        else:
+            face((inner[i + 1], outer[i + 1], outer[i], inner[i]), col)
 
 def poster(cx, y, cz, i):
     box((cx, y, cz), (0.42, 0.02, 0.56), jit(P["paper"], 0.05), skip=("-y",))
@@ -971,6 +989,43 @@ def game_camera():
 # --- bake: AO + sun shadow into the vertex colours -------------------------------------
 SUN_FROM = Vector((-0.513, -0.281, 0.811))   # game dir light (6,10,4) in Blender coords
 
+def sun_shadow(objs, rays=7, spread=math.radians(3)):
+    """Cast-shadow factor per face corner (1 = lit, 0 = fully shadowed) by
+    ray-casting toward the sun through a BVH of the whole set. Replaces the
+    Cycles SHADOW bake, whose output is unbounded (values up to ~1e4 blew the
+    horse neck / signs out). Faces turned away from the sun stay 1: the game's
+    Lambert term already darkens them. A few jittered rays soften the edges."""
+    from mathutils.bvhtree import BVHTree
+    verts, polys = [], []
+    for o in objs:
+        mw, base = o.matrix_world, len(verts)
+        verts.extend(mw @ v.co for v in o.data.vertices)
+        polys.extend([base + i for i in p.vertices] for p in o.data.polygons)
+    tree = BVHTree.FromPolygons(verts, polys)
+    L = SUN_FROM.normalized()
+    t1 = L.orthogonal().normalized()
+    t2 = L.cross(t1)
+    k = math.tan(spread)
+    dirs = [L] + [(L + (t1 * math.cos(a) + t2 * math.sin(a)) * k).normalized()
+                  for a in (2 * math.pi * i / (rays - 1) for i in range(rays - 1))]
+    out = {}
+    for o in objs:
+        me, mw = o.data, o.matrix_world
+        nm = mw.to_3x3()
+        res = [1.0] * len(me.loops)
+        for p in me.polygons:
+            n = (nm @ p.normal).normalized()
+            if n.dot(L) <= 0.02:
+                continue
+            ctr = mw @ p.center
+            for li in p.loop_indices:
+                pt = mw @ me.vertices[me.loops[li].vertex_index].co
+                org = pt.lerp(ctr, 0.04) + n * 0.004   # off the edge + off the face
+                hit = sum(1 for d in dirs if tree.ray_cast(org, d, 80.0)[0] is not None)
+                res[li] = 1.0 - hit / len(dirs)
+        out[o.name] = res
+    return out
+
 def bake(objs):
     sc = bpy.context.scene
     prev_engine = sc.render.engine
@@ -998,29 +1053,26 @@ def bake(objs):
     helpers.append(sun)
     bpy.ops.object.select_all(action="DESELECT")
     for o in objs:
-        for nm in ("AO", "SH"):
-            if o.data.color_attributes.get(nm):
-                o.data.color_attributes.remove(o.data.color_attributes[nm])
-            o.data.color_attributes.new(nm, "FLOAT_COLOR", "CORNER")
+        if o.data.color_attributes.get("AO"):
+            o.data.color_attributes.remove(o.data.color_attributes["AO"])
+        o.data.color_attributes.new("AO", "FLOAT_COLOR", "CORNER")
+        o.data.color_attributes.active_color = o.data.color_attributes["AO"]
         o.select_set(True)
     bpy.context.view_layer.objects.active = objs[0]
-    for nm, typ in (("AO", "AO"), ("SH", "SHADOW")):
-        for o in objs:
-            o.data.color_attributes.active_color = o.data.color_attributes[nm]
-        bpy.ops.object.bake(type=typ)
+    bpy.ops.object.bake(type="AO")
+    shadow = sun_shadow(objs)
     for o in objs:
         me = o.data
-        col, ao, sh = (me.color_attributes[n].data for n in ("Col", "AO", "SH"))
+        col, ao = me.color_attributes["Col"].data, me.color_attributes["AO"].data
+        sh = shadow[o.name]
         glow = o.name == "S_Glow"
         k_ao, k_sh = (0.25, 0.0) if glow else (0.7, 0.42)
         for i in range(len(col)):
-            a = ao[i].color[0]
-            s = sh[i].color[0]
-            m = (1 - k_ao * (1 - a)) * (1 - k_sh * (1 - s))
+            a = min(1.0, max(0.0, ao[i].color[0]))
+            m = (1 - k_ao * (1 - a)) * (1 - k_sh * (1 - sh[i]))
             c = col[i].color
-            col[i].color = (c[0] * m, c[1] * m, c[2] * m, 1.0)
-        for n in ("AO", "SH"):
-            me.color_attributes.remove(me.color_attributes[n])
+            col[i].color = (min(1.0, c[0] * m), min(1.0, c[1] * m), min(1.0, c[2] * m), 1.0)
+        me.color_attributes.remove(me.color_attributes["AO"])
         me.color_attributes.active_color = me.color_attributes["Col"]
     for h in helpers:
         data = h.data
