@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { createArena, stagePositions, faceToward, timeOfDayForRound, cssSkyForRound, createShadowDecal, type ShadowDecal } from "../render/arena";
+import { createArena, stagePositions, faceToward, timeOfDayForRound, cssSkyForRound, createShadowDecal, HELL, type ShadowDecal } from "../render/arena";
 import { createCowboy, type Cowboy } from "../render/cowboy";
 import { loadCowboyGlb, swapCowboy, type CowboyGlb } from "../render/cowboyGlb";
 import { loadStreetGlb, type StreetSet } from "../render/streetGlb";
@@ -8,7 +8,7 @@ import { createAmbient } from "../render/ambient";
 import { createFixedStepper, STEP, MAX_FRAME_DT } from "../game/fixedStep";
 import { createRagdoll, bindAccessories, type Ragdoll } from "../render/ragdoll";
 import { DuelMachine, type WoundPose } from "../game/DuelMachine";
-import { bodyDamage, BASE_HP, LIFESTEAL_CAP_PER_HIT } from "../game/damage";
+import { bodyDamage, BASE_HP, LIFESTEAL_CAP_PER_HIT, DUEL_RANGE_MIN, DUEL_RANGE_MAX } from "../game/damage";
 import { GUNS, AI_ROSTER, GOLD_WIN_BESTOF, GOLD_WIN_DEATHMATCH, GOLD_LOSS_CONSOLATION, GOLD_KILL_BONUS, reviveDeathPrice } from "../game/economy";
 import { ProjectileSim, testCapsuleHit, CAPSULE_FOR_POSE, capsuleMid, type BulletState } from "../game/projectiles";
 import { LocalTransport } from "../game/Transport";
@@ -23,6 +23,17 @@ export type Mode = "standard" | "deathmatch" | "tutorial";
 const SHOTS_PER_DUEL = 6;
 const BEST_OF = 3; // first to 2
 const FIRST_TO = Math.ceil(BEST_OF / 2);
+// Quick-draw (user 2026-10-05): guns start in the holster, hand on the grip.
+// At DRAW the hand grips (QD_GRIP), pulls the gun clear (gun node blends
+// holster -> hand until QD_OUT), swings up to level (QD_END). Cosmetic and
+// time-based; the fire gate below is the gameplay rule, on the fixed clock.
+const QD_GRIP = 0.05;
+const QD_OUT = 0.16;
+const QD_END = 0.3;
+const DRAW_TICKS = 10; // 0.167s at 60Hz: no shot before the gun clears the holster
+// Last known OS pointer (survives across rounds): a new round's crosshair
+// starts where the mouse really is instead of a guessed screen point.
+let lastPointer: { x: number; y: number } | null = null;
 
 // Shop prices (proposed v1 — user approval needed before locking as final).
 export const SHOP_PRICES = { lifesteal: 100, gold: 120, revive: 50 };
@@ -219,7 +230,7 @@ function runDuel(
   series?: SeriesState,
   hellRound = false,
   reviveUsed = false,
-  opts: { run?: DeathRun; startHP?: number } = {},
+  opts: { run?: DeathRun; startHP?: number; distM?: number } = {},
 ): void {
   const run = opts.run;
   audio.stopMusic();
@@ -228,15 +239,17 @@ function runDuel(
   document.body.classList.add("in-duel"); // OS cursor hidden; crosshair is the pointer
   const coarse = isCoarsePointer();
   const gun = GUNS[adapter.loadProgress().equippedGun] ?? GUNS.default;
-  const distM = hellRound ? 11 : 9 + Math.random() * 5; // uniform(9,14) per-round variance
+  const distM = opts.distM ?? DUEL_RANGE_MIN + Math.random() * (DUEL_RANGE_MAX - DUEL_RANGE_MIN); // uniform per round (hell too); DEV probes can force it
   // Round index drives time-of-day + the AI profile; deathmatch walks the
   // 3-profile roster per loop and the level (0.94^level) goes up each loop.
   const rIdx = series?.roundIndex ?? (run ? run.streak % AI_ROSTER.length : 0);
   const level = run ? Math.floor(run.streak / AI_ROSTER.length) : 0;
+  // Wind picks up as the day goes (noon breeze -> night gusts; hell roars).
+  audio.startWind(hellRound ? 0.8 : [0.45, 0.65, 0.85][Math.min(rIdx, 2)], hellRound);
 
-  const { scene, camera, renderer, worldPerPxAt, fitCamera, setTimeOfDay, noteFrame } = createArena(distM);
+  const { scene, camera, renderer, worldPerPxAt, fitCamera, setTimeOfDay, noteFrame, setProneFrame } = createArena(distM);
   // Time-of-day driver: R1 noon → R2 evening → R3+ night. Hell overrides.
-  setTimeOfDay(timeOfDayForRound(hellRound ? 2 : rIdx));
+  setTimeOfDay(hellRound ? HELL : timeOfDayForRound(rIdx));
   document.body.style.background = hellRound
     ? "linear-gradient(#0d0202 0%, #3a0a06 60%, #ff3a12 100%)"
     : cssSkyForRound(rIdx);
@@ -250,13 +263,12 @@ function runDuel(
   // import() splits into its own chunk; by the 2nd duel GameplayStart has
   // fired at least once, and single-duel hell is impossible (needs a double
   // KO first), so the load always lands post-GameplayStart in practice.
-  let hellDispose: (() => void) | null = null;
+  let hellSet: { tick(t: number): void; dispose(): void } | null = null;
   if (hellRound) {
     void import("../render/hell").then((m) => {
       if (!alive) return;
       try {
-        const h = m.enterHell(scene);
-        hellDispose = () => h.dispose();
+        hellSet = m.enterHell(scene, stage.player, stage.foe, `${import.meta.env.BASE_URL}models/hell.glb`);
       } catch { /* visual only — duel continues */ }
     });
   }
@@ -317,7 +329,8 @@ function runDuel(
   /** Per rendered frame. */
   function renderBullets(alpha: number): void {
     for (const v of bulletViews) {
-      if (!v.b || !v.b.alive || v.spent) { v.mesh.visible = false; continue; }
+      // Night: the foe's tracer would draw a line back to it; the flash alone gives it away.
+      if (!v.b || !v.b.alive || v.spent || (nightBlind && !roundOver && v.b.shooter === "foe")) { v.mesh.visible = false; continue; }
       v.mesh.visible = true;
       v.mesh.position.lerpVectors(v.prev, v.cur, alpha);
       tmpAim.subVectors(v.cur, v.prev);
@@ -334,12 +347,23 @@ function runDuel(
   let foe: Cowboy = createCowboy({ coat: 0x8a3b2e, hat: 0x1a1a1a, skin: 0xc98d5f, facing: -1, accent: 0x1a1a1a, moustache: true });
   foe.group.position.copy(stage.foe);
   faceToward(foe.group, stage.foe, stage.player);
+  player.holster?.();
+  foe.holster?.();
   scene.add(player.group, foe.group);
   // Sun shadow decals (cheap stand-in for a shadow map; see arena.ts).
   const shadowStrength = (i: number, hell: boolean) => (hell ? 0.4 : [0.62, 0.66, 0.3][Math.min(i, 2)]);
   const playerShadow = createShadowDecal(scene);
   const foeShadow = createShadowDecal(scene);
   for (const d of [playerShadow, foeShadow]) d.setStrength(shadowStrength(rIdx, hellRound));
+  // Night: the fog between the duelists swallows the foe (arena NIGHT
+  // fog); only its muzzle flash cuts through. Its shadow decal and duel
+  // marker would outline it from under the fog, so they go too.
+  const nightBlind = !hellRound && mode !== "tutorial" && rIdx >= 2;
+  if (nightBlind) foeShadow.setStrength(0);
+  {
+    const fm = scene.getObjectByName("FoeMarker");
+    if (fm) fm.visible = !nightBlind;
+  }
   // Accessories (hat, pads, belt, boots…) ride the nearest body part so no
   // detail freezes mid-air on death. Done before doll creation (attach
   // preserves world transforms, so body snapshots stay exact).
@@ -351,8 +375,10 @@ function runDuel(
   void loadCowboyGlb(`${base}models/cowboy_hero.glb`, "H").then((m) => {
     if (m && alive) {
       player = swapCowboy(scene, player, m);
-      // Late swap after DRAW: procedural owns the arms, silence idle.
+      // Late swap after DRAW: procedural owns the arms, silence idle. Before
+      // DRAW the fresh rig's gun goes into its holster (idle = hand on grip).
       if (tracking) (player as unknown as CowboyGlb).stopClips?.();
+      else player.holster?.();
       // Post-mortem swap: the fresh corpse must arrive already fallen.
       if (playerHP <= 0) {
         try { (player as unknown as CowboyGlb).playFrozen?.(playerFallVariant); } catch { /* noop */ }
@@ -366,6 +392,7 @@ function runDuel(
     if (m && alive) {
       foe = swapCowboy(scene, foe, m);
       if (tracking) (foe as unknown as CowboyGlb).stopClips?.();
+      else foe.holster?.();
       if (foeHP <= 0) {
         try { (foe as unknown as CowboyGlb).playFrozen?.(foeFallVariant); } catch { /* noop */ }
       }
@@ -378,7 +405,7 @@ function runDuel(
   // Its ambient life (signs, horse, tumbleweed) is posed from wall time in
   // frame(); windows/lanterns glow by time of day (noon dark -> night lit).
   let street: StreetSet | null = null;
-  void loadStreetGlb(`${base}models/street.glb`, distM).then((s) => {
+  if (!hellRound) void loadStreetGlb(`${base}models/street.glb`, distM).then((s) => {
     if (!s || !alive) return;
     for (const n of ["ProceduralStreet", "ProceduralDressing"]) {
       const old = scene.getObjectByName(n);
@@ -401,10 +428,12 @@ function runDuel(
   const roundLine = el(`<div class="roundline" style="position:absolute;top:calc(76px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);font-size:13px;font-weight:700;letter-spacing:.1em;color:#ffe9bd;text-shadow:0 1px 4px rgba(60,20,5,.9);pointer-events:none;"></div>`);
   root.appendChild(roundLine);
   function paintRound(): void {
-    if (hellRound) { roundLine.textContent = "🔥 HELL SUDDEN-DEATH — 1 BULLET EACH"; return; }
-    if (series) { roundLine.textContent = `ROUND ${series.roundIndex + 1} · YOU ${series.pWins} – ${series.fWins} FOE (1ST TO ${FIRST_TO})`; return; }
-    if (run) { roundLine.textContent = `DEATHMATCH · STREAK ${run.streak} · DUEL ${rIdx + 1}/${AI_ROSTER.length} · LOOP ${level + 1}`; return; }
-    roundLine.textContent = "";
+    // The round's distance shows on every line: it varies 6-25m (user 2026-10-05).
+    const dist = `${Math.round(distM)} M`;
+    if (hellRound) { roundLine.textContent = `HELL SUDDEN-DEATH — FIRST HIT WINS · ${dist}`; return; }
+    if (series) { roundLine.textContent = `ROUND ${series.roundIndex + 1} · YOU ${series.pWins} – ${series.fWins} FOE (1ST TO ${FIRST_TO}) · ${dist}`; return; }
+    if (run) { roundLine.textContent = `DEATHMATCH · STREAK ${run.streak} · DUEL ${rIdx + 1}/${AI_ROSTER.length} · LOOP ${level + 1} · ${dist}`; return; }
+    roundLine.textContent = dist;
   }
   paintRound();
   
@@ -467,15 +496,20 @@ function runDuel(
   // cam (pure forward motion foreshortens along the view axis); drop = group
   // y offset. TUNED AGAINST THE HIT CAPSULES (projectiles.ts CAPSULE_FOR_POSE):
   // the visible head must land within ~0.08m of capsule headY or shots at the
-  // visible head miss (the old numbers sat 0.2-0.33m too high). Measured with
-  // __gamey.poseProbe/tests/ai-wounds.ts: bend head 1.73 (cap 1.68), crouch
-  // 1.33 (1.32), prone 0.55 (0.55). Crouch = kneel: hips sink to ~0.55, shin
-  // flat on the dirt (see WOUND_JOINTS). Prone = lying (~85deg), not a plank.
+  // visible head miss. Measured with __gamey.poseProbe (scratch tune loop):
+  // crouch head 1.31 (cap 1.32), prone 0.58 (0.55).
+  // crouch = a LUNGE (user 2026-10-05): left leg forward, front thigh near
+  // level over a vertical shin, back knee hovering ~0.18m, hips turned 0.5rad
+  // so the stride reads on the chase cam, torso leaned 0.7rad (the rig's short
+  // shins only drop the hips ~0.4m; the lean brings the head to the capsule).
+  // prone = lying on the BACK aiming at the foe (user 2026-10-05): body tipped
+  // back about the feet, torso curled up ~20deg, chin tucked, left knee up,
+  // gun-side leg flat; feet stay toward the foe.
   const WOUND_POSE_TARGET: Record<WoundPose, { pitch: number; roll: number; drop: number }> = {
     none: { pitch: 0, roll: 0, drop: 0 },
     bend: { pitch: 0.4, roll: 0.12, drop: -0.15 },
-    crouch: { pitch: 0.6, roll: 0.15, drop: -0.42 },
-    prone: { pitch: 1.48, roll: 0.33, drop: 0 },
+    crouch: { pitch: 0, roll: 0, drop: -0.4 },
+    prone: { pitch: -1.35, roll: 0, drop: 0.27 },
   };
 
   /** Damped wound-pose chase. Skipped for corpses and the dead
@@ -506,8 +540,8 @@ function runDuel(
   const WOUND_JOINTS: Record<WoundPose, JointPose> = {
     none: { thighL: 0, thighR: 0, kneeL: 0, kneeR: 0, waist: 0, head: 0, armL: 0, hipYaw: 0 },
     bend: { thighL: 0, thighR: 0, kneeL: -0.4, kneeR: -0.4, waist: 0, head: 0, armL: 0, hipYaw: 0 }, // = the GLB-tuned +0.4 before rig signs
-    crouch: { thighL: 0, thighR: 0, kneeL: 0, kneeR: 0, waist: 0, head: 0, armL: 0, hipYaw: 0 },
-    prone: { thighL: 0, thighR: 0, kneeL: 0, kneeR: 0, waist: 0, head: 0, armL: 0, hipYaw: 0 },
+    crouch: { thighL: -1.281, kneeL: 1.281, thighR: 1.2, kneeR: 0.55, waist: 0.7, head: -0.3, armL: -1.1, hipYaw: 0.5 },
+    prone: { thighL: -0.95, kneeL: 1.9, thighR: -0.12, kneeR: 0, waist: 0.3, head: 0.9, armL: 0.7, hipYaw: 0 },
   };
 
   /** Gun-arm stabilizer. Wound poses pitch AND roll the whole body (group),
@@ -568,8 +602,9 @@ function runDuel(
   }
   /** Lying down: the upper arm would hang straight into the dirt. Swing the
       shoulder forward and fold the elbow back by the same amount (muzzle
-      direction unchanged) once the body is near horizontal; 0 when upright. */
-  const armLift = (c: Cowboy): number => Math.min(0.9, Math.max(0, (c.group.rotation.x - 0.9) * 1.5));
+      direction unchanged) once the body is near horizontal (either way:
+      prone lies on its back); 0 when upright. */
+  const armLift = (c: Cowboy): number => Math.min(0.9, Math.max(0, (Math.abs(c.group.rotation.x) - 0.9) * 1.5)); // face down or on the back
 
   /** Rest rotation + position of each driven node, captured on a cowboy's
       first drive (the head and cuff are not authored at 0). */
@@ -637,8 +672,16 @@ function runDuel(
       capsule: (side: "player" | "foe") => CAPSULE_FOR_POSE[side === "player" ? playerWound : foeWound],
       roll: (n: number) => machine.rollWound(n),
       /** Jump straight into a hell sudden-death round (repro/tests). */
-      hell: () => { cleanup(); runDuel(root, adapter, mode, audio, series, true, reviveUsed, { run }); },
-      state: () => ({ phase: machine.phase, roundOver, playerHP, foeHP, ammo, foeAmmo, hell: hellRound, live: sim.bullets.filter((b) => b.alive).length }),
+      hell: (d?: number) => { cleanup(); runDuel(root, adapter, mode, audio, series, true, reviveUsed, { run, distM: d }); },
+      /** Jump to best-of round i (0 noon, 1 evening, 2 night) at 1-1. */
+      round: (i: number, d?: number) => { cleanup(); runDuel(root, adapter, "standard", audio, { roundIndex: i, pWins: Math.min(i, 1), fWins: Math.min(i, 1) }, false, reviveUsed, { distM: d }); },
+      state: () => ({ phase: machine.phase, roundOver, playerHP, foeHP, ammo, foeAmmo, hell: hellRound, live: sim.bullets.filter((b) => b.alive).length, night: nightBlind, fog: (scene.fog as THREE.FogExp2).density, distM }),
+      /** Revolver state + world position (quick-draw checks). */
+      gun: (side: "player" | "foe") => {
+        const c = side === "player" ? player : foe;
+        const p = (c.gun ?? c.gunTip).getWorldPosition(new THREE.Vector3());
+        return { state: c.gunState?.() ?? "hand", pos: [p.x, p.y, p.z], drawTick, tick: machine.tick };
+      },
       /** Focus QTE readout: needle as rendered right now + zone + tallies. */
       qte: () => ({
         needle: qte.peek(qteExtra()),
@@ -654,13 +697,13 @@ function runDuel(
       /** Look-dev: force round i's time of day + street glow; hell=true
           also drops the hell set in (street captures, not gameplay). */
       tod: (i: number, hell = false) => {
-        setTimeOfDay(timeOfDayForRound(hell ? 2 : i));
+        setTimeOfDay(hell ? HELL : timeOfDayForRound(i));
         gunsmoke.setAmbient(spriteLight(i, hell));
         ambientFx.setTimeOfDay(i, hell);
         vignette.classList.toggle("dark", hell || i >= 2);
         for (const d of [playerShadow, foeShadow]) d.setStrength(shadowStrength(i, hell));
         street?.setGlow(hell ? 1 : [0, 0.55, 1][Math.min(i, 2)]);
-        if (hell) void import("../render/hell").then((m) => m.enterHell(scene));
+        if (hell && !hellSet) void import("../render/hell").then((m) => { hellSet = m.enterHell(scene, stage.player, stage.foe, `${import.meta.env.BASE_URL}models/hell.glb`); });
       },
       /** Joint + group rotation readout (pose debug). */
       joints: (side: "player" | "foe") => {
@@ -736,6 +779,19 @@ function runDuel(
           depth: box.max.z - box.min.z, width: box.max.x - box.min.x,
         };
       },
+      /** Lowest meshes (world bbox min y) — pose tuning: what digs in. */
+      lowest: (side: "player" | "foe", n = 4) => {
+        const c = side === "player" ? player : foe;
+        c.group.updateMatrixWorld(true);
+        const out: [string, number][] = [];
+        c.group.traverse((o) => {
+          const g = (o as THREE.Mesh).isMesh && o.visible ? (o as THREE.Mesh).geometry : null;
+          if (!g) return;
+          if (!g.boundingBox) g.computeBoundingBox();
+          out.push([o.name, +g.boundingBox!.clone().applyMatrix4(o.matrixWorld).min.y.toFixed(3)]);
+        });
+        return out.sort((a, b) => a[1] - b[1]).slice(0, n);
+      },
       /** Gun elevation in degrees (muzzle vs shoulder, world space): 0 = level,
           negative = pointing at the ground. Pose-tuning aid. */
       gunElev: (side: "player" | "foe") => {
@@ -792,6 +848,26 @@ function runDuel(
           }
         };
       })(),
+      /** Look-dev close-up on one cowboy's hip/gun hand: camera `dist` m
+          away at `angleDeg` round from its front (0 = facing it, 90 = its
+          gun side), hip height. `null` restores the duel camera. */
+      closeUp: (() => {
+        let saved: { p: THREE.Vector3; q: THREE.Quaternion } | null = null;
+        return (side: "player" | "foe" | null, angleDeg = 60, dist = 2.2) => {
+          if (side) {
+            if (!saved) saved = { p: camera.position.clone(), q: camera.quaternion.clone() };
+            const c = side === "player" ? player : foe;
+            const at = c.group.position.clone().add(new THREE.Vector3(0, 1.0, 0));
+            const yaw = c.group.rotation.y + (angleDeg * Math.PI) / 180;
+            camera.position.set(at.x + Math.sin(yaw) * dist, 1.25, at.z + Math.cos(yaw) * dist);
+            camera.lookAt(at);
+          } else if (saved) {
+            camera.position.copy(saved.p);
+            camera.quaternion.copy(saved.q);
+            saved = null;
+          }
+        };
+      })(),
       /** Force a wound pose (prone visuals / prone-duel tests). */
       force: (side: "player" | "foe", wound: WoundPose) => {
         // Real wounds follow a flinch whose clip is released (see FLINCH_END):
@@ -822,8 +898,10 @@ function runDuel(
   // between duels. Hell rounds start both at full HP.
   let playerHP = opts.startHP ?? (run && !hellRound ? run.hp : BASE_HP);
   let foeHP = BASE_HP;
-  let ammo = hellRound ? 1 : SHOTS_PER_DUEL;
-  let foeAmmo = hellRound ? 1 : SHOTS_PER_DUEL;
+  // Hell (user 2026-10-05): ONE round, full cylinders, the first shot that
+  // lands wins (body or head); see maybeEnd.
+  let ammo = SHOTS_PER_DUEL;
+  let foeAmmo = SHOTS_PER_DUEL;
   let alive = true;
   let tracking = false; // arm follows aim only after DRAW
   let lastShotAt = -1e9;
@@ -872,12 +950,16 @@ function runDuel(
   // settle level, then normal aim takes over. One procedural path for both
   // rigs (GLB + procedural share the armR/elbowR seam).
   let drawT = 99;
+  let drawTick = -1; // fixed-clock tick DRAW began (fire gate)
+  // Arm pose at DRAW (hand on the holstered grip), the quick-draw start.
+  const drawFrom = { player: { s: 0.55, z: 0, e: -0.25 }, foe: { s: 0.55, z: 0, e: -0.25 } };
   // Aim OPENS off-target: muzzle at the dirt between the duelists, so the
   // player must manually drag up onto the foe after DRAW. Aim stays parked
   // through Focus (locked no-pre-aim rule); the first mouse move / touch
   // after DRAW takes over via aimFromClient.
   // Crosshair renders where the pointer IS (never pinned to the target).
-  const pointerPx = { x: window.innerWidth / 2, y: window.innerHeight * 0.4 };
+  const pointerPx = lastPointer ? { ...lastPointer } : { x: window.innerWidth / 2, y: window.innerHeight * 0.4 };
+  let pointerKnown = !!lastPointer;
 
   function placeCross(cx: number, cy: number): void {
     const rr = root.getBoundingClientRect();
@@ -1092,7 +1174,7 @@ function runDuel(
     foeFlinchT = 0;
     shakeFoe();
     try { (foe as unknown as CowboyGlb).playClip?.("flinch"); } catch { /* no-op */ }
-    // Wound lottery: persistent reactive pose (bend/crouch/prone unlocks).
+    // Wound lottery: persistent reactive pose (lunge, prone unlocks at hit 2).
     foeWounds += 1;
     foeWound = machine.rollWound(foeWounds);
     refreshAimPlane();
@@ -1171,6 +1253,17 @@ function runDuel(
     const foeDead = foeHP <= 0;
     const playerDead = playerHP <= 0;
     const now = performance.now();
+    if (hellRound && (foeDead || playerDead)) {
+      // Hell is a one-time sudden death: the first shot that lands wins.
+      // No double KO (it used to chain into another hell), no waiting for
+      // crossing bullets: the rest are dropped so nothing lands afterwards.
+      roundOver = true;
+      for (const b of sim.bullets) if (b.alive) sim.kill(b);
+      if (foeDead && playerDead) endRound("BOTH HIT AT ONCE", "Hell takes no winner. Back to the street.", "draw");
+      else if (foeDead) endFoeDown();
+      else endRound("YOU'RE DOWN", "The foe hit first.", "f");
+      return;
+    }
     // Hell trigger (locked): both dead AND both killing blows were lethal
     // in-flight bullets fired before death. Lethality is recorded on the
     // bullet at fire time; the window covers crossing shots (~0.2s flight).
@@ -1218,12 +1311,9 @@ function runDuel(
     if (!anyLive && ammo <= 0 && (foeAmmo <= 0 || mode === "tutorial")) {
       roundOver = true;
       if (hellRound) {
-        // Hell loops on both-miss until someone hits (locked). Sudden death:
-        // a non-lethal body hit still takes it (this used to replay as
-        // "BOTH MISS" — and before that never resolved at all).
-        if (playerHP === foeHP) endRound("BOTH MISS — AGAIN!", "Hell wants blood. 1 bullet each.", "draw", false);
-        else if (playerHP > foeHP) endRound("YOU DREW BLOOD — HELL IS YOURS", "Sudden death: first hit wins.", "p");
-        else endRound("THE FOE DREW BLOOD", "Sudden death: first hit wins.", "f");
+        // Hell never repeats (user 2026-10-05): every bullet missed, so it
+        // counts as a drawn round and play goes back to the street.
+        endRound("NO BLOOD DRAWN", "Hell spares you both. Back to the street.", "draw");
         return;
       }
       if (playerHP === foeHP) endRound("DRAW — REPLAY", "Same HP.", "draw", false);
@@ -1279,7 +1369,8 @@ function runDuel(
     resolvePose(foe, foeHP, foeDoll, result === "f" ? "victory" : "defeat");
 
     // Revive offer (Slice 7): player lost, token held or buyable, once/game.
-    if (result === "f" && !reviveUsed && mode !== "tutorial") {
+    // Not in hell: a revive would replay the one-time sudden death.
+    if (result === "f" && !reviveUsed && mode !== "tutorial" && !hellRound) {
       offerRevive(() => {
         // accepted: same round, Focus restart, player 1HP + foe full (locked §6)
         cleanup();
@@ -1299,8 +1390,15 @@ function runDuel(
         return;
       }
       if (hellRound) {
-        // hell resolved (or both-miss loop)
-        if (result === "draw") { cleanup(); runDuel(root, adapter, mode, audio, series, true, reviveUsed, { run }); return; }
+        // hell resolved. A drawn hell (all missed / simultaneous hits) never
+        // replays: it counts as a drawn round, back to normal duels.
+        if (result === "draw") {
+          cleanup();
+          if (run) { continueRun(run, "draw"); return; }
+          if (series) { series.roundIndex++; runDuel(root, adapter, mode, audio, series, false, reviveUsed); return; }
+          showHome(root, adapter, audio);
+          return;
+        }
         if (run) { cleanup(); continueRun(run, result); return; }
         // winner takes the point into the series
         if (series) {
@@ -1443,6 +1541,7 @@ function runDuel(
   function attemptFire(cx: number, cy: number): void {
     if (roundOver) return;
     if (machine.phase !== "draw" && machine.phase !== "fire") return;
+    if (drawTick < 0 || machine.tick - drawTick < DRAW_TICKS) return; // gun still clearing the holster
     if (ammo <= 0) return;
     const now = performance.now();
     if (now - lastShotAt < gun.cooldownMs) {
@@ -1454,7 +1553,7 @@ function runDuel(
     kickT = 0;
     machine.phase = "fire";
     ammo -= 1;
-    machine.applyRecoil(gun.recoilAddDeg);
+    machine.applyShotKick(); // x1.5, accelerating return to the pre-shot size
     audio.playGunshotSynth(0.85);
     paintBars();
 
@@ -1507,8 +1606,8 @@ function runDuel(
       target.x += gauss() * (1 - ai.focusQuality) * 0.5;
       target.y += gauss() * (1 - ai.focusQuality) * 0.4;
       const dir = target.sub(muzzle).normalize();
-      gunsmoke.spawn(muzzle);
-      audio.playGunshotSynth(0.5);
+      gunsmoke.spawn(muzzle, nightBlind); // night: the flash is the only giveaway, so it carries
+      audio.playGunshotSynth(0.6, true); // the foe's shot, down the street
       foeKickT = 0; // procedural shooting anim: gun-kick decay in frame loop
       const lethal = bodyDamage(GUNS.default.baseDamage, distM) >= playerHP;
       const b = sim.fire({ from: muzzle, dir, distM, shooter: "foe", gunId: "default", lethal });
@@ -1575,7 +1674,7 @@ function runDuel(
           if (r.head) { killFoe(true, point, dir); }
           else {
             const dmg = bodyDamage(gun.baseDamage, distM);
-            if (dmg >= foeHP) killFoe(false, point, dir);
+            if (hellRound || dmg >= foeHP) killFoe(false, point, dir); // hell: any hit kills
             else woundFoe(dmg);
           }
         }
@@ -1590,7 +1689,7 @@ function runDuel(
           if (r.head) hitPlayer(true, 999, point, dir);
           else {
             const dmg = bodyDamage(GUNS.default.baseDamage, distM);
-            hitPlayer(false, dmg, point, dir);
+            hitPlayer(false, hellRound ? Math.max(dmg, playerHP) : dmg, point, dir); // hell: any hit kills
           }
         }
       }
@@ -1610,11 +1709,14 @@ function runDuel(
     if (res === "miss") focusPenalty();
   }
   const focusUI: FocusUI = mountFocusUI(root, { onPress: qtePress });
-  // Ring QTE on the foe's body; its radius is the crosshair radius (floored
-  // so the arc stays readable at the smallest blooms / phone heights).
+  // Ring QTE on the holster zone (user 2026-10-05: on the foe it always
+  // told where he stands, which defeats the night fog); its radius is the
+  // crosshair radius (floored so the arc stays readable at the smallest
+  // blooms / phone heights).
   const RING_MIN_R = 16;
   function renderQte(needle: number): void {
-    const c = foeScreen().body;
+    const zr = zone.getBoundingClientRect();
+    const c = { x: zr.left + zr.width / 2, y: zr.top + zr.height / 2 };
     focusUI.render({
       needle,
       zoneC: qte.zoneC,
@@ -1634,6 +1736,8 @@ function runDuel(
   const onMouseMove = (e: MouseEvent) => {
     pointerPx.x = e.clientX;
     pointerPx.y = e.clientY;
+    lastPointer = { x: e.clientX, y: e.clientY };
+    pointerKnown = true;
     if (machine.phase === "ready") {
       if (inZone(e.clientX, e.clientY)) beginFocus();
     } else if (machine.phase === "draw" || machine.phase === "fire") {
@@ -1649,6 +1753,7 @@ function runDuel(
     const zy = e.clientY;
     pointerPx.x = zx;
     pointerPx.y = zy;
+    if (e.pointerType === "mouse") { lastPointer = { x: zx, y: zy }; pointerKnown = true; }
 
     if (machine.phase === "ready") {
       if (t.closest?.(".readyzone") || inZone(zx, zy)) beginFocus();
@@ -1721,10 +1826,11 @@ function runDuel(
 
   function cleanup(): void {
     alive = false;
+    audio.stopWind();
     document.body.classList.remove("in-duel");
     document.body.style.background = "";
     for (const t of foeTimers) window.clearTimeout(t);
-    try { if (hellDispose) hellDispose(); } catch { /* noop */ }
+    try { hellSet?.dispose(); } catch { /* noop */ }
     try { if (playerDoll) playerDoll.dispose(); } catch { /* noop */ }
     try { if (foeDoll) foeDoll.dispose(); } catch { /* noop */ }
     window.removeEventListener("mousemove", onMouseMove);
@@ -1769,26 +1875,42 @@ function runDuel(
     player.elbowR.rotation.x += (elbowTarget - player.elbowR.rotation.x) * fast;
   }
 
-  // Holster pull: hand drops to the hip holster, draws, sweeps up past level
-  // with a flourish overshoot, settles level. Returns [shoulderX, elbowX].
-  function drawChoreo(t: number): { s: number; e: number } {
-    const keys: Array<[number, number, number]> = [
-      [0, 0.55, -0.25],
-      [0.28, 0.95, -0.55],
-      [0.55, -0.18, 0.12],
-      [0.85, 0.05, 0.0],
+  // Quick-draw arm path from the hand-on-holster pose `f`: hold while the
+  // hand grips, pull up (elbow folds, hand rises along the holster), swing
+  // out past level, settle level (0.05, 0, 0). Smoothstep between keys.
+  function quickDraw(t: number, f: { s: number; z: number; e: number }): { s: number; z: number; e: number } {
+    const keys: Array<[number, number, number, number]> = [
+      [0, f.s, f.z, f.e],
+      [QD_GRIP, f.s, f.z, f.e],
+      [QD_OUT, f.s + (0.05 - f.s) * 0.45, f.z * 0.4, f.e - 0.35],
+      [QD_END - 0.08, -0.12, 0, 0.08],
+      [QD_END, 0.05, 0, 0],
     ];
-    if (t <= 0) return { s: keys[0][1], e: keys[0][2] };
+    if (t <= 0) return { s: f.s, z: f.z, e: f.e };
     for (let i = 1; i < keys.length; i++) {
       if (t <= keys[i][0]) {
-        const [t0, s0, e0] = keys[i - 1];
-        const [t1, s1, e1] = keys[i];
+        const [t0, s0, z0, e0] = keys[i - 1];
+        const [t1, s1, z1, e1] = keys[i];
         let u = (t - t0) / (t1 - t0);
         u = u * u * (3 - 2 * u); // smoothstep: no pops between phases
-        return { s: s0 + (s1 - s0) * u, e: e0 + (e1 - e0) * u };
+        return { s: s0 + (s1 - s0) * u, z: z0 + (z1 - z0) * u, e: e0 + (e1 - e0) * u };
       }
     }
-    return { s: 0.05, e: 0.0 };
+    return { s: 0.05, z: 0, e: 0 };
+  }
+  /** Gun node blend holster -> hand for quick-draw time t. */
+  const gunOut = (t: number): number => {
+    const u = Math.min(1, Math.max(0, (t - QD_GRIP) / (QD_OUT - QD_GRIP)));
+    return u * u * (3 - 2 * u);
+  };
+  /** Pose one duelist's arm + gun along the quick-draw (direct set: the
+      path is already smooth, a chase would blur the fast pull). */
+  function stepQuickDraw(c: Cowboy, from: { s: number; z: number; e: number }, lift: number): void {
+    const q = quickDraw(drawT, from);
+    c.armR.rotation.x = q.s + lift;
+    c.armR.rotation.z = q.z;
+    c.elbowR.rotation.x = q.e - lift;
+    c.drawStep?.(gunOut(drawT));
   }
 
   // Direct joint chase for choreography + foe hold (any cowboy's joints).
@@ -1810,6 +1932,7 @@ function runDuel(
   const aimDir = new THREE.Vector3();
   let swayT = 0;
   let punchT = -1;
+  let proneCam = 0; // eased 0..1 toward the player-prone camera framing
 
   // Initial cue per device.
   cue.textContent = "HOLSTER UP";
@@ -1834,18 +1957,20 @@ function runDuel(
     // delta-time not frame count). Rendering interpolates by alpha below.
     const alpha = stepper.advance(dt, () => {
       machine.step(STEP);
+      if (drawTick < 0 && (machine.phase === "draw" || machine.phase === "fire")) drawTick = machine.tick;
       if (machine.phase === "focus" && !machine.paused) qte.advance(STEP);
-      // Bloom after DRAW: holding without firing regrows it (locked 09-26
-      // §1); once shooting, recoil recovery rewards pacing. Neither runs in
+      // Bloom after DRAW: holding without firing regrows the base (locked
+      // 09-26 §1); shots kick it x1.5 and hits rubber-band it out, both
+      // returning to the base (DuelMachine.recoverKick). Neither runs in
       // ready/focus: free shrink there drifted the crosshair gap + keybar
       // fill on mere hover, breaking the locked tap-only focus feel.
       if (machine.phase === "draw") machine.regrow(STEP);
-      else if (machine.phase === "fire") machine.recover(STEP, gun.recoilRecoveryDegPerSec);
+      if (machine.phase === "draw" || machine.phase === "fire") machine.recoverKick(STEP); // shot kick / hit rubber band
       stepBullets();
       bulletImpacts();
       // Ammo-out re-check once the last bullet lands. maybeEnd only ran on
       // kills and on the player's last shot, so when the foe fired last
-      // (always in hell: 1 bullet each) and hit non-lethally or missed,
+      // and hit non-lethally or missed,
       // the round never resolved (soft lock, user report 2026-10-05).
       if (!roundOver && ammo <= 0 && (foeAmmo <= 0 || mode === "tutorial") && !sim.bullets.some((b) => b.alive)) maybeEnd();
       // Corpse physics lives on the same fixed clock (null-safe).
@@ -1892,10 +2017,10 @@ function runDuel(
     // Foe gun arm: holster-pull choreography first (~0.9s), then hold the
     // raise with decaying gun-kick. Stands down once resolved (clips own it).
     if (tracking && foeHP > 0 && !foeDoll?.fallen && !roundOver) {
-      if (drawT < 0.9) {
-        const c = drawChoreo(drawT);
-        chaseArm(c.s + armLift(foe), c.e - armLift(foe), dt, foe.armR, foe.elbowR);
+      if (drawT < QD_END) {
+        stepQuickDraw(foe, drawFrom.foe, armLift(foe));
       } else {
+        foe.drawStep?.(1);
         const fk = 0.3 * Math.exp(-foeKickT * 10);
         chaseArm(0.05 + armLift(foe), -armLift(foe), dt, foe.armR, foe.elbowR, fk);
       }
@@ -1903,7 +2028,7 @@ function runDuel(
     }
     const foeDip = foeFlinchT < 0.35 ? Math.sin((foeFlinchT / 0.35) * Math.PI) * 0.07 : 0;
     const playerDip = playerFlinchT < 0.35 ? Math.sin((playerFlinchT / 0.35) * Math.PI) * 0.07 : 0;
-    // Wound poses: damped chase toward the lottery pose (bend/crouch/prone).
+    // Wound poses: damped chase toward the lottery pose (lunge/prone).
     // Feet stay planted (group-level pitch + y-drop only); corpses and the
     // dead are skipped inside woundStep so death hands off with no snap.
     [foeDrop, foeRoll] = woundStep(foe, foeWound, foeHP, foeDoll, dt, foeDrop, foeRoll);
@@ -1913,6 +2038,17 @@ function runDuel(
     if (!foeDoll?.fallen && foeHP > 0) foe.group.position.y = foeDrop + Math.sin(swayT * 2.1) * 0.012 - foeDip;
     if (!playerDoll?.fallen && playerHP > 0) player.group.position.y = playerDrop + Math.sin(swayT * 2.1 + 1.3) * 0.012 - playerDip;
 
+    if (machine.phase === "ready" && !coarse && !roundOver) {
+      // HOLSTER UP: the OS cursor is hidden in-duel, so the pointer cross
+      // shows from the first frame (at the last known mouse position) to
+      // guide the mouse into the holster. Hidden only until the mouse is
+      // known (first move of the session).
+      cross.style.display = pointerKnown ? "block" : "none";
+      cross.classList.add("focusing");
+      if (pointerKnown) placeCross(pointerPx.x, pointerPx.y);
+    }
+    if (machine.phase === "ready") renderQte(qte.pos); // ring rides the holster zone (laid out after the first render)
+    zone.classList.toggle("qting", machine.phase === "focus" && !machine.paused); // label off while the ring runs in it
     if (machine.phase === "focus") {
       // PC: the countdown only runs while the pointer stays in the holster
       // zone; leaving it restarts the whole Focus (3.0s, bloom, QTE) on
@@ -1939,12 +2075,15 @@ function runDuel(
       placeCross(pointerPx.x, pointerPx.y);
     } else if ((machine.phase === "draw" || machine.phase === "fire") && !tracking) {
       tracking = true;
-      cue.textContent = hellRound ? "DRAW! — HELL (1 BULLET)" : "DRAW!";
+      cue.textContent = hellRound ? "DRAW! — FIRST HIT WINS" : "DRAW!";
       popCue();
       sub.textContent = coarse ? "Drag to aim · tap to fire!" : "Aim with mouse · click to fire!";
       focusUI.setVisible(false);
       zone.style.display = "none";
-      foe.setRaised();
+      // Quick-draw starts from wherever the hand rests on the holster (idle
+      // clip pose / procedural solve), read before the clips stop.
+      drawFrom.player = { s: player.armR.rotation.x, z: player.armR.rotation.z, e: player.elbowR.rotation.x };
+      drawFrom.foe = { s: foe.armR.rotation.x, z: foe.armR.rotation.z, e: foe.elbowR.rotation.x };
       // From DRAW the procedural choreography + aim own both gun arms. The
       // looping idle clip (keyed at the guns-down 0.55) was still rewriting
       // armR/elbowR every mixer update, so the chase only ever won a
@@ -1952,28 +2091,28 @@ function runDuel(
       // the sag depended on the refresh rate.
       try { (foe as unknown as CowboyGlb).stopClips?.(); } catch { /* noop */ }
       try { (player as unknown as CowboyGlb).stopClips?.(); } catch { /* noop */ }
-      drawT = 0; // holster-pull choreography runs for both duelists
+      drawT = 0; // quick-draw runs for both duelists
       cross.style.display = "block";
       cross.classList.remove("focusing");
       scheduleFoe();
     }
 
-    if (tracking && !aimEngaged && !roundOver) {
-      // Pre-engagement: crosshair glued to the pointer (as in Focus) — never
+    if (tracking && !roundOver && (!aimEngaged || drawT < QD_END)) {
+      // Pre-engagement (and always during the quick-draw): crosshair glued to the pointer (as in Focus) — never
       // self-moves — while the hand pulls from the holster and sweeps up
       // through the choreography. First input blends straight into aim via
       // the damped chase (no snap).
       placeCross(pointerPx.x, pointerPx.y);
       kickT += dt;
-      if (drawT < 0.9) {
-        const c = drawChoreo(drawT);
-        chaseArm(c.s + armLift(player), c.e - armLift(player), dt, player.armR, player.elbowR);
+      if (drawT < QD_END) {
+        stepQuickDraw(player, drawFrom.player, armLift(player));
       } else {
+        player.drawStep?.(1);
         poseArm(0.0, dt, 0);
       }
     }
 
-    if (tracking && aimEngaged && !roundOver) {
+    if (tracking && aimEngaged && !roundOver && drawT >= QD_END) { // the quick-draw owns the arm first
       // Aim chase: aimWorld glides toward the pointer-driven target every
       // frame (~20/s, delta-time safe), so the crosshair + gun travel in a
       // smooth motion to wherever the pointer moves — never a snap.
@@ -2000,6 +2139,10 @@ function runDuel(
     placeShadow(playerShadow, player, playerWound, playerHP, playerDoll);
 
     gunsmoke.update(dt);
+    // Player prone (alive or a corpse that died prone) lies back toward the
+    // camera: ease to the prone framing so the body stays on screen.
+    proneCam += ((playerWound === "prone" ? 1 : 0) - proneCam) * (1 - Math.exp(-dt * 4));
+    setProneFrame(proneCam);
     // Kill punch: a short push-in (camera.zoom narrows the FOV) once the round is decided. Only
     // after roundOver (aim/hit tests read the camera; they're off by then).
     if (punchT >= 0 && punchT < 0.6) {
@@ -2010,6 +2153,7 @@ function runDuel(
     }
     const nowSec = performance.now() / 1000;
     street?.tick(nowSec);
+    hellSet?.tick(nowSec);
     ambientFx.tick(nowSec, renderer.getPixelRatio());
     renderer.render(scene, camera);
   }

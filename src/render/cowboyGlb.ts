@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { Cowboy } from "./cowboy";
+import { makeGunHolster, type Cowboy } from "./cowboy";
 
 // Loads a Blender-exported cowboy GLB and adapts it to the Cowboy seam so
 // game logic never knows the difference. Returns null on ANY failure —
@@ -197,7 +197,13 @@ export async function loadCowboyGlb(
     // Idle sways whenever clips exist and nothing else plays (flinch/
     // victory stop it via playClip's stop-all; engage stops it via stopClips).
     playClip("idle", true);
-    return { group, armR, elbowR, gunTip, parts, joints, setGunsDown, setRaised, setFall, mixer, hasClip, playClip, stopClips, playFrozen, update };
+    // Revolver node + holster socket (build_glbs.py). Old GLBs lack them:
+    // makeGunHolster no-ops and the gun stays in hand. The idle clip keys the
+    // hand onto the holstered grip, so holster() only moves the gun.
+    const gun = byName("Gun");
+    const holsterCtl = makeGunHolster(gun, byName("GunHolster"), elbowR);
+    return { group, armR, elbowR, gunTip, parts, joints, setGunsDown, setRaised, setFall, mixer, hasClip, playClip, stopClips, playFrozen, update,
+      gun, holster: holsterCtl.holster, drawStep: holsterCtl.drawStep, gunState: holsterCtl.gunState };
   } catch (err) {
     // Silent in prod (procedural fallback covers AdBlock/offline/file://);
     // noisy in dev so a broken model/swap is impossible to miss.

@@ -38,6 +38,7 @@ export interface Ambient {
 export function createAmbient(scene: THREE.Scene, distM: number): Ambient {
   const { player: pPos, foe: fPos } = stagePositions(distM);
   const mid = pPos.clone().lerp(fPos, 0.5);
+  const halfL = pPos.distanceTo(fPos) / 2;
   const axis = fPos.clone().sub(pPos).setY(0).normalize();
   const perp = new THREE.Vector3(-axis.z, 0, axis.x);
   // Seeded scatter in the air the camera looks through: from just past the
@@ -49,7 +50,7 @@ export function createAmbient(scene: THREE.Scene, distM: number): Ambient {
   const BOX_H = 5.5;
   for (let i = 0; i < COUNT; i++) {
     const p = mid.clone()
-      .addScaledVector(axis, -4 + rnd() * 20)
+      .addScaledVector(axis, -halfL * 0.6 + rnd() * (halfL * 1.6 + 10)) // player side .. past the foe, any distance
       .addScaledVector(perp, (rnd() - 0.5) * 20);
     pos[i * 3] = p.x;
     pos[i * 3 + 1] = rnd() * BOX_H;

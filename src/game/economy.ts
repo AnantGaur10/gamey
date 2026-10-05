@@ -10,8 +10,6 @@ export interface GunDef {
   bloomStartDeg: number;
   bloomMinDeg: number;
   focusPerTapDeg: number;
-  recoilAddDeg: number;
-  recoilRecoveryDegPerSec: number;
   /** Chamber cooldown between shots. User-locked mapping: higher damage →
       SHORTER cooldown (descending with damage). Default fires fastest. */
   cooldownMs: number;
@@ -26,8 +24,6 @@ export const GUNS: Record<string, GunDef> = {
     bloomStartDeg: 2.4,
     bloomMinDeg: 0.12, // floor cut to 20% (user 2026-10-05; was 0.6)
     focusPerTapDeg: 0.3,
-    recoilAddDeg: 0.7,
-    recoilRecoveryDegPerSec: 0.4,
     cooldownMs: 380,
     extra: "none",
     extraValue: 0,
@@ -38,8 +34,6 @@ export const GUNS: Record<string, GunDef> = {
     bloomStartDeg: 2.4,
     bloomMinDeg: 0.14, // 20% of 0.7
     focusPerTapDeg: 0.3,
-    recoilAddDeg: 0.7,
-    recoilRecoveryDegPerSec: 0.4,
     cooldownMs: 620,
     extra: "lifesteal",
     extraValue: 0.2,
@@ -50,8 +44,6 @@ export const GUNS: Record<string, GunDef> = {
     bloomStartDeg: 2.4,
     bloomMinDeg: 0.16, // 20% of 0.8
     focusPerTapDeg: 0.3,
-    recoilAddDeg: 0.7,
-    recoilRecoveryDegPerSec: 0.4,
     cooldownMs: 650,
     extra: "gold",
     extraValue: 0.4,

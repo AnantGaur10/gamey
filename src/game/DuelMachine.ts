@@ -34,6 +34,16 @@ const QTE_PERFECT_MULT = 1.2;
 const QTE_GOOD_MULT = 0.8;
 const SPREAD_RIM_P = 0.7; // share of shots in the outer ring of the bloom
 const SPREAD_INNER_R = 0.6; // ring starts at this fraction of the radius
+// Shot kick (user 2026-10-05, anti-spam): every player shot multiplies the
+// crosshair by SHOT_KICK_MULT, then it returns to the pre-shot ("base")
+// radius faster and faster (ease-in, KICK_RETURN_S). Shots stack on the
+// current size. A hit (flinch) rubber-bands it out to the post-hit radius:
+// an underdamped spring (RB_*) that overshoots once, then the same return.
+const SHOT_KICK_MULT = 1.5;
+const KICK_RETURN_S = 0.6;
+const RB_STIFF = 180;
+const RB_DAMP = 12; // zeta ~0.45: one visible overshoot
+const RB_S = 0.3;
 
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -64,6 +74,14 @@ export class DuelMachine {
   private tapCount = 0;
   private holdSec = 0;
   private rng: () => number;
+  /** bloomDeg = base + kickDeg; kick = transient shot/flinch excess. */
+  private kickDeg = 0;
+  private kickFrom = 0;
+  private kickT = 0;
+  private rbOn = false;
+  private rbT = 0;
+  private rbV = 0;
+  private rbTarget = 0;
 
   constructor(opts: {
     seed: number;
@@ -121,6 +139,8 @@ export class DuelMachine {
     if (this.phase !== "focus") return;
     this.tick = 0;
     this.bloomDeg = this.bloomStartDeg;
+    this.kickDeg = this.kickFrom = this.kickT = this.rbV = 0;
+    this.rbOn = false;
     this.taps = [];
     this.misses = [];
     this.tapCount = 0;
@@ -182,18 +202,65 @@ export class DuelMachine {
     }
   }
 
-  applyRecoil(addDeg: number): void {
-    this.bloomDeg = Math.min(this.bloomMaxDeg, this.bloomDeg + addDeg);
+  /** Radius the kick returns to (Focus result + post-DRAW regrow). */
+  get baseBloomDeg(): number {
+    return this.bloomDeg - this.kickDeg;
   }
 
+  /** Kick ceiling: bloomMax x SHOT_KICK_MULT, so a first shot always kicks
+      the full x1.5 (the base never exceeds bloomMax) and stacked spam stays
+      bounded. */
+  get kickCapDeg(): number {
+    return this.bloomMaxDeg * SHOT_KICK_MULT;
+  }
+
+  /** Set the transient excess over the base (total capped at kickCapDeg). */
+  private setKick(k: number): void {
+    const base = this.bloomDeg - this.kickDeg;
+    this.kickDeg = Math.max(0, Math.min(this.kickCapDeg - base, k));
+    this.bloomDeg = base + this.kickDeg;
+  }
+
+  /** Player shot: crosshair x SHOT_KICK_MULT of its current size, then the
+      ease-in return restarts (recoverKick). */
+  applyShotKick(): void {
+    const base = this.baseBloomDeg;
+    this.rbOn = false;
+    this.setKick(this.bloomDeg * SHOT_KICK_MULT - base);
+    this.kickFrom = this.kickDeg;
+    this.kickT = 0;
+  }
+
+  /** Flinch (locked §3, both ways): the crosshair rubber-bands out to
+      `bloomAddDeg` past its current size, then returns like a shot kick. */
   applyFlinch(aimUpDeg: number, bloomAddDeg: number): { aimUpDeg: number } {
-    this.bloomDeg = Math.min(this.bloomMaxDeg, this.bloomDeg + bloomAddDeg);
+    const base = this.baseBloomDeg;
+    this.rbTarget = Math.min(this.kickCapDeg, this.bloomDeg + bloomAddDeg) - base;
+    this.rbOn = true;
+    this.rbT = 0;
+    this.rbV = 0;
     return { aimUpDeg };
   }
 
-  /** Post-shot recoil recovery (fire phase): rewards pacing. */
-  recover(dtSec: number, recoveryDegPerSec: number): void {
-    this.bloomDeg = Math.max(this.bloomMinDeg, this.bloomDeg - recoveryDegPerSec * dtSec);
+  /** Fixed-step kick integration (draw + fire): rubber-band spring first,
+      then the accelerating return to the base (0 exactly at KICK_RETURN_S). */
+  recoverKick(dtSec: number): void {
+    if (this.rbOn) {
+      const a = RB_STIFF * (this.rbTarget - this.kickDeg) - RB_DAMP * this.rbV;
+      this.rbV += a * dtSec;
+      this.setKick(this.kickDeg + this.rbV * dtSec);
+      this.rbT += dtSec;
+      if (this.rbT >= RB_S) {
+        this.rbOn = false;
+        this.kickFrom = this.kickDeg;
+        this.kickT = 0;
+      }
+      return;
+    }
+    if (this.kickDeg <= 0) return;
+    this.kickT += dtSec;
+    const u = this.kickT / KICK_RETURN_S;
+    this.setKick(u >= 1 ? 0 : this.kickFrom * (1 - u * u));
   }
 
   /** Post-DRAW regrow (locked 2026-09-26 §1): holding without firing lets

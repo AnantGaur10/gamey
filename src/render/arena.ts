@@ -25,26 +25,41 @@ export const NOON: TimeOfDay = {
   fogDensity: 0.008,
 };
 
-// R1 noon → R2 evening → R3+ night (locked 2026-09-24 §11). Night keeps the
-// foe readable: ~15% ambient floor + rim via fill, muzzle flash via smoke.
+// R1 noon → R2 evening → R3+ night (locked 2026-09-24 §11). Darker = harder
+// to spot the foe (user 2026-10-05, overrides the old "night keeps the foe
+// readable"): the FOG between the duelists thickens each round. FogExp2
+// share at the foe (camera ~12-17m away): noon ~1%, evening ~25-40%,
+// night ~85-99%, so at night only its (fog-free) muzzle flash shows it.
 export const EVENING: TimeOfDay = {
   skyTop: 0x4a3a6e,
   skyBottom: 0xe8875a,
-  hemiIntensity: 0.75,
-  dirIntensity: 0.42,
+  hemiIntensity: 0.6,
+  dirIntensity: 0.36,
   dirColor: 0xff9a4a,
   fogColor: 0xc97a4a,
-  fogDensity: 0.011,
+  fogDensity: 0.045, // dusk haze: the foe half-fades, the storefronts mostly
 };
 
 export const NIGHT: TimeOfDay = {
   skyTop: 0x060a1c,
   skyBottom: 0x2a1a3a,
-  hemiIntensity: 0.22,
-  dirIntensity: 0.18,
+  hemiIntensity: 0.16,
+  dirIntensity: 0.14,
   dirColor: 0x8aa8ff,
   fogColor: 0x141024,
-  fogDensity: 0.016,
+  fogDensity: 0.12, // the foe sinks into the night fog; the flash cuts through
+};
+
+// Hell sudden death (render/hell.ts builds the set): lava light comes from
+// the set's own up-light; the arena sun is a dim ember.
+export const HELL: TimeOfDay = {
+  skyTop: 0x0a0202,
+  skyBottom: 0x3a0a06,
+  hemiIntensity: 0.3,
+  dirIntensity: 0.22,
+  dirColor: 0xff7a40,
+  fogColor: 0x1c0605,
+  fogDensity: 0.014,
 };
 
 // HiDPI: render at device pixels (capped) so phones/retina aren't upscaled
@@ -60,6 +75,9 @@ const CAM_SIDE = -1.25; // negative: right of the player as seen from behind
 const CAM_UP = 2.05;
 const CAM_LOOK_SIDE = 1.5; // look point offset beside the foe
 const CAM_LOOK_UP = 1.0;
+const PRONE_BACK = 2.5; // player-prone framing (setProneFrame)
+const PRONE_UP = 0.4;
+const PRONE_PITCH = (12 * Math.PI) / 180;
 
 // Duelist shadows are DECALS, not a shadow map: a real-time map (PCF
 // lookups on every street pixel + a depth pass of ~100 cowboy meshes) cost
@@ -278,6 +296,8 @@ export function createArena(distM: number): {
   fitCamera(): void;
   /** Feed every rendered frame's dt: sustained slow frames drop HiDPI to 1x. */
   noteFrame(dt: number): void;
+  /** 0 = normal framing, 1 = player-prone framing (blend in between). */
+  setProneFrame(k: number): void;
 } {
   const scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2(NOON.fogColor, NOON.fogDensity);
@@ -302,7 +322,9 @@ export function createArena(distM: number): {
     .add(new THREE.Vector3(0, CAM_UP, 0));
   // Aim point: past the foe, pulled toward the player's side of the axis so
   // the foe lands right of centre (the shoulder offset alone puts it left).
-  camera.lookAt(fPos.clone().addScaledVector(gunSide, CAM_LOOK_SIDE).add(new THREE.Vector3(0, CAM_LOOK_UP, 0)));
+  const camLook = fPos.clone().addScaledVector(gunSide, CAM_LOOK_SIDE).add(new THREE.Vector3(0, CAM_LOOK_UP, 0));
+  camera.lookAt(camLook);
+  const camBase = camera.position.clone();
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setClearColor(0x000000, 0); // CSS sunset gradient shows through
@@ -327,7 +349,12 @@ export function createArena(distM: number): {
   addDirtDetail(groundMat, duelDir, 1);
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(600, 400), groundMat);
   ground.rotation.x = -Math.PI / 2;
-  scene.add(ground);
+  // Street floor (ground, ruts, sun, markers) is one group so the hell set
+  // can hide it whole: hell shares nothing with the street.
+  const floor = new THREE.Group();
+  floor.name = "ArenaFloor";
+  scene.add(floor);
+  floor.add(ground);
   // Lit (not Basic): unlit ruts glowed as bright stripes at night / in hell.
   // Long enough to run under the camera: the bottom rows see the ground
   // ~12m behind it (negative near plane above).
@@ -340,7 +367,7 @@ export function createArena(distM: number): {
     rut.position.copy(rutMid).addScaledVector(rutPerp, s);
     rut.position.y = 0.012;
     rut.rotation.y = rutYaw;
-    scene.add(rut);
+    floor.add(rut);
   }
 
   // Sun disc (photo's pale sun), fixed to face the static camera.
@@ -350,7 +377,7 @@ export function createArena(distM: number): {
   );
   sun.position.copy(pPos).addScaledVector(duelDir, 22).add(new THREE.Vector3(0, 10, 0));
   sun.lookAt(camera.position);
-  scene.add(sun);
+  floor.add(sun);
 
   // Duel markers at the staged feet: a faint scuffed circle (the sun
   // shadows carry the contact now).
@@ -360,7 +387,8 @@ export function createArena(distM: number): {
     const m = new THREE.Mesh(new THREE.RingGeometry(0.52, 0.6, 32), markerMat);
     m.rotation.x = -Math.PI / 2;
     m.position.set(p.x, 0.02, p.z);
-    scene.add(m);
+    m.name = p === foe ? "FoeMarker" : "PlayerMarker"; // runDuel moves/hides the foe's
+    floor.add(m);
   }
 
   // Frontier main street (ref: specs/references/cboysaloon.jpeg): wood row
@@ -717,6 +745,24 @@ export function createArena(distM: number): {
     winMax = 0;
   }
 
+  // Player prone (on the back, head toward the camera): the default frame's
+  // bottom edge meets the dirt ~1m past the player's feet, so the body
+  // dropped out of view. Pull the camera back + up and tilt down to
+  // PRONE_PITCH; the look point keeps its ground position, so the foe stays
+  // in frame. Aim/hit tests re-project through the live camera every frame.
+  const _look = new THREE.Vector3();
+  let proneK = 0;
+  function setProneFrame(k: number): void {
+    if (Math.abs(k - proneK) < 1e-4) return; // steady: leave the camera alone (DEV sideView)
+    proneK = k;
+    camera.position.copy(camBase).addScaledVector(duelDir, -PRONE_BACK * k);
+    camera.position.y += PRONE_UP * k;
+    const horiz = Math.hypot(camLook.x - camera.position.x, camLook.z - camera.position.z);
+    const proneY = camera.position.y - horiz * Math.tan(PRONE_PITCH);
+    _look.copy(camLook).setY(camLook.y + (proneY - camLook.y) * k);
+    camera.lookAt(_look);
+  }
+
   return {
     scene,
     camera,
@@ -725,5 +771,6 @@ export function createArena(distM: number): {
     setTimeOfDay,
     fitCamera,
     noteFrame,
+    setProneFrame,
   };
 }

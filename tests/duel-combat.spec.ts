@@ -246,10 +246,10 @@ test.describe('Gamey - Combat', () => {
     expect(errors).toEqual([]);
   }, { timeout: 60000 });
 
-  test('hell round always resolves once both bullets are spent (no soft lock)', async ({ page }) => {
-    // Repro (user 2026-10-05): player misses, the foe's single bullet hits
-    // NON-lethally -> both guns empty, nothing alive, round never ended.
-    type S = { roundOver: boolean; hell: boolean; ammo: number; foeAmmo: number; live: number };
+  test('hell is one round: first hit wins, never repeats (no soft lock)', async ({ page }) => {
+    // User 2026-10-05: hell soft-locked after a non-lethal hit, and must be a
+    // one-time round where the first shot that lands wins.
+    type S = { roundOver: boolean; hell: boolean; ammo: number; foeAmmo: number; live: number; playerHP: number; foeHP: number };
     const state = () => page.evaluate(() => (window as unknown as { __gamey: { state(): S } }).__gamey.state());
     await startStandard(page);
     await page.evaluate(() => (window as unknown as { __gamey: { hell(): void } }).__gamey.hell());
@@ -257,11 +257,87 @@ test.describe('Gamey - Combat', () => {
     expect((await state()).hell).toBe(true);
     await parkInHolster(page);
     await waitDraw(page);
-    await page.mouse.click(30, 30); // fire the one bullet into the sky
-    await page.waitForFunction(() => {
-      const s = (window as unknown as { __gamey: { state(): S } }).__gamey.state();
-      return s.roundOver;
-    }, undefined, { timeout: 12000 });
-    expect((await state()).roundOver).toBe(true);
+    // Empty the cylinder into the sky; the foe's first landed hit (or all
+    // twelve misses) must end it.
+    for (let i = 0; i < 6 && !(await state()).roundOver; i++) {
+      await page.mouse.click(30, 30);
+      await page.waitForTimeout(450);
+    }
+    await page.waitForFunction(
+      () => (window as unknown as { __gamey: { state(): S } }).__gamey.state().roundOver,
+      undefined, { timeout: 15000 },
+    );
+    const end = await state();
+    // Any hit is decisive: a hit duelist is down, never left wounded.
+    expect(end.playerHP === 0 || end.playerHP === 100).toBe(true);
+    expect(end.foeHP).toBe(100);
+    // Next round is a normal duel, never another hell.
+    await page.waitForFunction(
+      () => (document.querySelector('.cue')?.textContent ?? '').includes('HOLSTER UP')
+        || !!document.querySelector('.menu h1'),
+      undefined, { timeout: 12000 },
+    );
+    if (await page.locator('.readyzone').isVisible().catch(() => false)) expect((await state()).hell).toBe(false);
+  }, { timeout: 90000 });
+  test('guns start holstered, quick-draw at DRAW, no shot before the gun clears', async ({ page }) => {
+    // User 2026-10-05: revolver tucked in the holster with the hand on it
+    // until DRAW, then pulled fast. Clicks are ignored while it clears.
+    type G = { state: string; pos: number[]; drawTick: number; tick: number };
+    const gun = (side: string) => page.evaluate((s) => (window as unknown as { __gamey: { gun(x: string): G } }).__gamey.gun(s), side);
+    await startStandard(page);
+    expect((await gun('player')).state).toBe('holster');
+    expect((await gun('foe')).state).toBe('holster');
+    await parkInHolster(page);
+    expect((await gun('foe')).state).toBe('holster'); // still holstered through Focus
+    // Fire the instant DRAW lands (in-page, same frame): must be ignored.
+    const early = await page.evaluate(() => new Promise<{ ammo0: number; ammo1: number; dt: number }>((resolve) => {
+      type W = { __gamey: { gun(s: string): G; state(): { ammo: number } } };
+      const g = (window as unknown as W).__gamey;
+      const loop = () => {
+        const f = g.gun('foe');
+        if (f.drawTick < 0) { setTimeout(loop, 2); return; }
+        const ammo0 = g.state().ammo;
+        const c = document.querySelector('canvas')!.getBoundingClientRect();
+        document.querySelector('canvas')!.dispatchEvent(new PointerEvent('pointerdown', { clientX: c.left + c.width / 2, clientY: c.top + c.height / 2, bubbles: true, pointerType: 'mouse' }));
+        resolve({ ammo0, ammo1: g.state().ammo, dt: f.tick - f.drawTick });
+      };
+      loop();
+    }));
+    expect(early.dt).toBeLessThan(10);
+    expect(early.ammo1).toBe(early.ammo0);
+    await page.waitForTimeout(600);
+    expect((await gun('player')).state).toBe('hand');
+    expect((await gun('foe')).state).toBe('hand');
+    // Gun cleared: a click now fires.
+    const p = await aimBody(page);
+    await page.mouse.click(p.x, p.y);
+    await page.waitForTimeout(200);
+    expect((await duelState(page)).ammo).toBeLessThan(6);
+  }, { timeout: 60000 });
+  test('a shot kicks the crosshair x1.5, then it returns to the pre-shot size', async ({ page }) => {
+    // User 2026-10-05 (anti-spam): 6px -> 9px on a shot, back to 6px faster
+    // and faster. Tutorial duel: the dummy never fires, so no hit flinch.
+    await page.goto('/basic.html');
+    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('.readyzone', { timeout: 8000 }); // fresh profile = tutorial
+    await parkInHolster(page);
+    await waitDraw(page);
+    await page.waitForTimeout(500); // gun clear of the holster
+    type Q = { bloom: number };
+    const r = await page.evaluate(() => {
+      const g = (window as unknown as { __gamey: { qte(): Q } }).__gamey;
+      const gap = () => parseFloat(getComputedStyle(document.querySelector('.crosshair')!).getPropertyValue('--gap') || '0');
+      const b0 = g.qte().bloom, gap0 = gap();
+      const c = document.querySelector('canvas')!.getBoundingClientRect();
+      document.querySelector('canvas')!.dispatchEvent(new PointerEvent('pointerdown', { clientX: c.left + 30, clientY: c.top + 30, bubbles: true, pointerType: 'mouse' }));
+      return { b0, b1: g.qte().bloom, gap0 };
+    });
+    expect(r.b1 / r.b0).toBeCloseTo(1.5, 2);
+    await page.waitForTimeout(150);
+    const gapKick = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.crosshair')!).getPropertyValue('--gap') || '0'));
+    expect(gapKick).toBeGreaterThan(r.gap0 * 1.2); // the drawn ring follows
+    await page.waitForTimeout(900);
+    const b2 = await page.evaluate(() => (window as unknown as { __gamey: { qte(): Q } }).__gamey.qte().bloom);
+    expect(b2).toBeCloseTo(r.b0, 3); // back on the pre-shot size
   }, { timeout: 60000 });
 });

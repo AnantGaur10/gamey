@@ -143,6 +143,8 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 /* Holster zone: dashed gate below the player's legs, gun-hand side.
    Size is set from world units by JS (zoom-invariant); CSS only styles.
    Fully transparent fill so the game shows through — border + text only. */
+/* Focus: the QTE ring runs inside the zone, the label would sit on it. */
+.readyzone.qting b, .readyzone.qting small { visibility: hidden; }
 .readyzone {
   position: absolute; border-radius: 18px;
   z-index: 5; /* above the QTE bar: taps must reach the zone, never swallowed */

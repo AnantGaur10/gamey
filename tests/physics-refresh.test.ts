@@ -12,6 +12,8 @@ import { createRagdoll, type RagdollParts } from "../src/render/ragdoll";
 import { createFixedStepper, STEP } from "../src/game/fixedStep";
 import { ProjectileSim } from "../src/game/projectiles";
 import { TimingQte } from "../src/game/timingQte";
+import { DuelMachine } from "../src/game/DuelMachine";
+import { falloffRetention } from "../src/game/damage";
 
 let failures = 0;
 const ok = (cond: boolean, msg: string) => { if (!cond) { failures++; console.log(`  ✗ ${msg}`); } else console.log(`  ✓ ${msg}`); };
@@ -166,6 +168,66 @@ console.log("== focus QTE needle ==");
     }
     ok(maxErr < 1e-6, `${hz}Hz: rendered needle on the fixed-clock curve (max err ${maxErr.toExponential(1)})`);
   }
+}
+
+console.log("== crosshair shot kick + hit rubber band ==");
+{
+  // User 2026-10-05: a shot kicks the crosshair x1.5, which returns to the
+  // pre-shot size faster and faster (0.6s); a hit mid-return rubber-bands it
+  // out past the post-hit size (overshoot) and the return starts over. All
+  // on the fixed clock: identical at any refresh rate.
+  const mk = () => new DuelMachine({ seed: 7, bloomStartDeg: 2.4, bloomMinDeg: 0.12, focusPerTapDeg: 0.3, duelDistM: 12 });
+  const BASE = 1.2;
+  const run = (hz: number, flinchAtTick: number | null) => {
+    const m = mk();
+    m.bloomDeg = BASE;
+    m.phase = "fire";
+    m.applyShotKick();
+    const kicked = m.bloomDeg;
+    const st = createFixedStepper();
+    let t = 0, tick = 0, peak = 0;
+    const byTick: number[] = [];
+    while (t < 2.0 - 1e-9) {
+      t += 1 / hz;
+      st.advance(1 / hz, () => {
+        tick++;
+        if (flinchAtTick !== null && tick === flinchAtTick) m.applyFlinch(0, 1.1);
+        m.recoverKick(STEP);
+        byTick.push(m.bloomDeg);
+        if (flinchAtTick !== null && tick > flinchAtTick) peak = Math.max(peak, m.bloomDeg);
+      });
+    }
+    return { kicked, byTick, peak };
+  };
+  const ref = run(60, null);
+  ok(Math.abs(ref.kicked - BASE * 1.5) < 1e-9, `shot kicks x1.5 (${BASE} -> ${ref.kicked.toFixed(3)} deg)`);
+  {
+    const m = mk(); m.bloomDeg = 3.9; m.phase = "fire"; m.applyShotKick();
+    ok(Math.abs(m.bloomDeg - 3.9 * 1.5) < 1e-9, `full x1.5 even at bloomMax (3.9 -> ${m.bloomDeg.toFixed(3)})`);
+    m.applyShotKick();
+    ok(m.bloomDeg <= 3.9 * 1.5 + 1e-9, `stacked spam stays bounded (${m.bloomDeg.toFixed(3)} <= ${(3.9 * 1.5).toFixed(3)})`);
+  }
+  const ex = (i: number) => ref.byTick[i - 1] - BASE;
+  const k0 = ref.kicked - BASE;
+  ok(Math.abs(ex(18) - k0 * 0.75) < 1e-9 && ex(18) > k0 * 0.5, `ease-in: only 25% of the kick gone at 0.3s (${(1 - ex(18) / k0).toFixed(2)}), the rest in the second half`);
+  ok(Math.abs(ref.byTick[35] - BASE) < 1e-12, `back on the pre-shot size at 0.6s (${ref.byTick[35].toFixed(4)})`);
+  const hit = run(60, 18);
+  const target = Math.min((2.4 + 1.5) * 1.5, BASE + k0 * 0.75 + 1.1);
+  ok(hit.peak > target * 1.03, `hit mid-return rubber-bands past the post-hit size (peak ${hit.peak.toFixed(3)} > ${target.toFixed(3)})`);
+  ok(Math.abs(hit.byTick[hit.byTick.length - 1] - BASE) < 1e-9, `then returns to the pre-shot size (${hit.byTick[hit.byTick.length - 1].toFixed(4)})`);
+  for (const hz of [30, 144, 165, 240]) {
+    const r = run(hz, 18);
+    const n = Math.min(r.byTick.length, hit.byTick.length);
+    let d = 0;
+    for (let i = 0; i < n; i++) d = Math.max(d, Math.abs(r.byTick[i] - hit.byTick[i]));
+    ok(d === 0, `${hz}Hz: kick + rubber band bit-identical per tick to 60Hz`);
+  }
+}
+
+console.log("== damage falloff (6-25m) ==");
+{
+  const want: Array<[number, number]> = [[6, 1], [9, 1], [11, 0.92], [14, 0.7], [15, 0.7 - 0.22 / 3], [17, 0.55], [25, 0.55]];
+  for (const [d, r] of want) ok(Math.abs(falloffRetention(d) - r) < 1e-9, `${d}m -> ${falloffRetention(d).toFixed(3)} (want ${r.toFixed(3)})`);
 }
 
 console.log(failures === 0 ? "\nPHYSICS REFRESH-RATE CHECK: PASS" : `\nPHYSICS REFRESH-RATE CHECK: ${failures} FAILED`);

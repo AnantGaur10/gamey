@@ -23,6 +23,7 @@
     "ai:play:all": "npm run ai:play && npm run ai:play:mobile",
     "build:models": "blender -b blender/cowboys.blend --python scripts/blender/build_glbs.py",
     "build:street": "blender -b --factory-startup --python scripts/blender/build_street.py",
+    "build:hell": "blender -b --factory-startup --python scripts/blender/build_hell.py",
     "ai:wounds": "DRAW=1 VIEWPORT=1920x1080 npx tsx tests/ai-wounds.ts",
     "ai:wounds:mobile": "DRAW=1 VIEWPORT=800x450 npx tsx tests/ai-wounds.ts",
     "test:physics": "tsx tests/physics-refresh.test.ts",

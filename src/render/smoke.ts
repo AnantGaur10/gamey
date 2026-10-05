@@ -6,8 +6,8 @@ import * as THREE from "three";
 // for the Slice-2 AI fire path). update(dt) runs every frame.
 // Light-wisp style per locked decision: soft pale puff, fast expand, slow
 // rise, fade ~0.8s. depthWrite:false, capped pool, ortho-safe soft alpha.
-// Muzzle flash = 2-frame additive quad (bright, feeds the locked
-// night-readability rule: silhouette + flash at night).
+// Muzzle flash = 2-frame additive quad. At night it is the ONLY giveaway of
+// the foe (bright variant + afterglow, see spawn).
 
 const SMOKE_POOL = 12;
 const FLASH_POOL = 4;
@@ -15,6 +15,11 @@ const DUST_POOL = 16;
 const SMOKE_LIFE = 0.8;
 const FLASH_LIFE = 0.07; // ~2 frames at 60Hz + margin
 const DUST_LIFE = 0.75;
+// Bright shots (the night foe, user 2026-10-05): the flash is the only
+// thing that shows where it stands, so it is bigger and leaves a short
+// ember afterglow the eye can still find after the 2-frame flash.
+const GLOW_POOL = 4;
+const GLOW_LIFE = 0.7;
 
 /** body = hit on a duelist (the locked "no blood, dust puff only"),
  *  ground = a miss striking the street, wood = a miss striking a facade.
@@ -54,8 +59,9 @@ interface Dust extends Puff {
 }
 
 export interface Gunsmoke {
-  /** Spawn one wisp + one flash at a world pos. */
-  spawn(pos: THREE.Vector3): void;
+  /** Spawn one wisp + one flash at a world pos; bright = bigger flash +
+   *  ember afterglow (night giveaway). */
+  spawn(pos: THREE.Vector3, bright?: boolean): void;
   /** Dust burst at an impact point, kicked along the bullet direction. */
   dust(pos: THREE.Vector3, dir: THREE.Vector3, kind: DustKind): void;
   /** Scene light level 0..1 for the unlit smoke/dust sprites (noon 1,
@@ -64,7 +70,7 @@ export interface Gunsmoke {
   /** Advance all live puffs/flashes. Call every frame. */
   update(dt: number): void;
   /** Live sprite counts (DEV probes / tests). */
-  live(): { smoke: number; dust: number; flash: number };
+  live(): { smoke: number; dust: number; flash: number; glow: number };
 }
 
 export function createGunsmoke(scene: THREE.Scene): Gunsmoke {
@@ -72,6 +78,8 @@ export function createGunsmoke(scene: THREE.Scene): Gunsmoke {
   const smokes: Puff[] = [];
   const flashes: Puff[] = [];
   const dusts: Dust[] = [];
+  const glows: Puff[] = [];
+  let nextGlow = 0;
   let nextSmoke = 0;
   let nextFlash = 0;
   let nextDust = 0;
@@ -100,12 +108,29 @@ export function createGunsmoke(scene: THREE.Scene): Gunsmoke {
       opacity: 0,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
+      fog: false, // cuts through the night fog: the night foe's only giveaway
     });
     const s = new THREE.Sprite(mat);
     s.visible = false;
     s.scale.setScalar(0.001);
     scene.add(s);
     flashes.push({ sprite: s, life: -1, seed: i });
+  }
+  for (let i = 0; i < GLOW_POOL; i++) {
+    const mat = new THREE.SpriteMaterial({
+      map: shared,
+      color: 0xff8a3a,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      fog: false,
+    });
+    const s = new THREE.Sprite(mat);
+    s.visible = false;
+    s.scale.setScalar(0.001);
+    scene.add(s);
+    glows.push({ sprite: s, life: -1, seed: i });
   }
   for (let i = 0; i < DUST_POOL; i++) {
     const mat = new THREE.SpriteMaterial({
@@ -122,7 +147,7 @@ export function createGunsmoke(scene: THREE.Scene): Gunsmoke {
     dusts.push({ sprite: s, life: -1, seed: 0, vel: new THREE.Vector3(), size: 0.4 });
   }
 
-  function spawn(pos: THREE.Vector3): void {
+  function spawn(pos: THREE.Vector3, bright = false): void {
     const p = smokes[nextSmoke];
     nextSmoke = (nextSmoke + 1) % SMOKE_POOL;
     p.life = 0;
@@ -138,8 +163,18 @@ export function createGunsmoke(scene: THREE.Scene): Gunsmoke {
     f.life = 0;
     f.sprite.visible = true;
     f.sprite.position.copy(pos);
-    f.sprite.scale.setScalar(0.55);
+    f.seed = bright ? 1 : 0; // scale multiplier flag for update()
+    f.sprite.scale.setScalar(bright ? 1.1 : 0.55);
     f.sprite.material.opacity = 1;
+    if (bright) {
+      const g = glows[nextGlow];
+      nextGlow = (nextGlow + 1) % GLOW_POOL;
+      g.life = 0;
+      g.sprite.visible = true;
+      g.sprite.position.copy(pos);
+      g.sprite.scale.setScalar(1.6);
+      g.sprite.material.opacity = 1;
+    }
   }
 
   function dust(pos: THREE.Vector3, dir: THREE.Vector3, kind: DustKind): void {
@@ -215,15 +250,30 @@ export function createGunsmoke(scene: THREE.Scene): Gunsmoke {
       }
       // 2-frame flicker: big on frame 1, slightly smaller on frame 2.
       const frame2 = t > 0.5;
-      f.sprite.scale.setScalar(frame2 ? 0.42 : 0.55);
+      f.sprite.scale.setScalar((frame2 ? 0.42 : 0.55) * (f.seed ? 2 : 1));
       f.sprite.material.opacity = frame2 ? 0.7 : 1;
     }
   }
 
-  function live(): { smoke: number; dust: number; flash: number } {
-    const n = (a: Puff[]) => a.filter((p) => p.life >= 0).length;
-    return { smoke: n(smokes), dust: n(dusts), flash: n(flashes) };
+  function updateGlows(step: number): void {
+    for (const g of glows) {
+      if (g.life < 0) continue;
+      g.life += step;
+      const t = g.life / GLOW_LIFE;
+      if (t >= 1) {
+        g.life = -1;
+        g.sprite.visible = false;
+        continue;
+      }
+      g.sprite.scale.setScalar(1.6 - 0.9 * t);
+      g.sprite.material.opacity = (1 - t) * (1 - t);
+    }
   }
 
-  return { spawn, dust, setAmbient, update, live };
+  function live(): { smoke: number; dust: number; flash: number; glow: number } {
+    const n = (a: Puff[]) => a.filter((p) => p.life >= 0).length;
+    return { smoke: n(smokes), dust: n(dusts), flash: n(flashes), glow: n(glows) };
+  }
+
+  return { spawn, dust, setAmbient, update: (dt) => { update(dt); updateGlows(Math.min(dt, 0.1)); }, live };
 }

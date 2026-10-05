@@ -49,6 +49,80 @@ export interface Cowboy {
   setGunsDown(): void;
   setRaised(): void;
   setFall(dead: boolean): void;
+  /** Revolver as one node (absent/null on old rigs: always in hand). */
+  gun?: THREE.Object3D | null;
+  /** Tuck the revolver into the hip holster (round start, before DRAW). */
+  holster?(): void;
+  /** Quick-draw progress 0..1: holster -> hand (1 = exact in-hand rest). */
+  drawStep?(k: number): void;
+  gunState?(): GunState;
+}
+
+export type GunState = "holster" | "drawing" | "hand";
+
+/** Holster/draw for a rig whose revolver is one node `gun` under `elbow`
+ *  (its authored parent = the in-hand rest) and whose `socket` (on the
+ *  pelvis) is the gun's transform when holstered. Null-safe: without a gun
+ *  or socket everything is a no-op and the gun stays in hand. */
+export function makeGunHolster(gun: THREE.Object3D | null, socket: THREE.Object3D | null, elbow: THREE.Object3D): {
+  holster(): void;
+  drawStep(k: number): void;
+  gunState(): GunState;
+} {
+  const restPos = gun ? gun.position.clone() : new THREE.Vector3();
+  const restQuat = gun ? gun.quaternion.clone() : new THREE.Quaternion();
+  const fromPos = new THREE.Vector3();
+  const fromQuat = new THREE.Quaternion();
+  let state: GunState = "hand";
+  return {
+    holster() {
+      if (!gun || !socket) return;
+      socket.add(gun);
+      gun.position.set(0, 0, 0);
+      gun.quaternion.identity();
+      state = "holster";
+    },
+    drawStep(k) {
+      if (!gun || !socket || state === "hand") return;
+      if (state === "holster") {
+        // The hand closes on the grip: from here the gun rides the hand,
+        // starting from exactly where the holster held it (no pop).
+        elbow.updateWorldMatrix(true, false);
+        elbow.attach(gun);
+        fromPos.copy(gun.position);
+        fromQuat.copy(gun.quaternion);
+        state = "drawing";
+      }
+      const u = Math.min(1, Math.max(0, k));
+      gun.position.lerpVectors(fromPos, restPos, u);
+      gun.quaternion.slerpQuaternions(fromQuat, restQuat, u);
+      if (u >= 1) state = "hand";
+    },
+    gunState: () => state,
+  };
+}
+
+/** Shoulder x/z + elbow x that put `hand` on `target` (world), by a coarse
+ *  then fine grid search. Used once per procedural rig (the GLB bakes the
+ *  same solve into its idle clip in build_glbs.py). */
+function solveHandPose(root: THREE.Object3D, arm: THREE.Object3D, elbow: THREE.Object3D, hand: THREE.Object3D, target: THREE.Vector3): [number, number, number] {
+  const p = new THREE.Vector3();
+  let best: [number, number, number] = [0, 0, 0];
+  let bd = Infinity;
+  const search = (c: [number, number, number], span: number, n: number) => {
+    const [cx, cz, ce] = c;
+    for (let i = 0; i <= n; i++) for (let j = 0; j <= n; j++) for (let k = 0; k <= n; k++) {
+      const ax = cx - span + (2 * span * i) / n, az = cz - span + (2 * span * j) / n, ex = ce - span + (2 * span * k) / n;
+      arm.rotation.set(ax, 0, az);
+      elbow.rotation.x = ex;
+      root.updateMatrixWorld(true);
+      const d = hand.getWorldPosition(p).distanceToSquared(target);
+      if (d < bd) { bd = d; best = [ax, az, ex]; }
+    }
+  };
+  search([0, 0, -0.5], 1.4, 14);
+  search(best, 0.2, 10);
+  return best;
 }
 
 export function createCowboy(opts: {
@@ -190,27 +264,63 @@ export function createCowboy(opts: {
   const handR = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.13, 0.13), mat(skin));
   handR.position.set(0, -0.32, 0.05);
   elbowR.add(fore, handR);
-  // Revolver: grip in fist, cylinder, long barrel, top frame.
+  // Revolver: grip in fist, cylinder, long barrel, top frame. One `gun`
+  // node (origin at the grip) so it can sit in the holster until DRAW.
   const steel = mat(0x3a3a40);
+  const gun = new THREE.Group();
+  gun.position.set(0, -0.36, 0.06); // the grip, in the elbow frame
+  const g = (o: THREE.Object3D, x: number, y: number, z: number): void => {
+    o.position.set(x, y + 0.36, z - 0.06);
+    gun.add(o);
+  };
   const grip = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.2, 0.1), mat(0x4a2c14));
-  grip.position.set(0, -0.36, 0.06);
   grip.rotation.x = 0.35;
+  g(grip, 0, -0.36, 0.06);
   const cylinder = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.13, 10), steel);
   cylinder.rotation.x = Math.PI / 2;
-  cylinder.position.set(0, -0.29, 0.15);
+  g(cylinder, 0, -0.29, 0.15);
   const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.08, 0.44), steel);
-  barrel.position.set(0, -0.28, 0.4);
+  g(barrel, 0, -0.28, 0.4);
   const frame = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.3), steel);
-  frame.position.set(0, -0.235, 0.28);
+  g(frame, 0, -0.235, 0.28);
   const gunTip = new THREE.Object3D();
-  gunTip.position.set(0, -0.28, 0.63);
-  elbowR.add(grip, cylinder, barrel, frame, gunTip);
+  g(gunTip, 0, -0.28, 0.63);
+  elbowR.add(gun);
   armR.add(elbowR);
   waist.add(armR);
+  // Hip holster on the pelvis (right side, outside the thigh) + the socket
+  // that holds the gun barrel-down in it: gun-local +Z (barrel) -> -Y via
+  // +90deg about X, so the grip points to the rear above the holster lip.
+  const holsterMesh = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.48, 0.14), mat(0x5a3418));
+  holsterMesh.position.set(0.3, 0.74 - 0.95, -0.02);
+  pelvis.add(holsterMesh);
+  const gunSock = new THREE.Object3D();
+  gunSock.position.set(0.3, 1.12 - 0.95, -0.1);
+  gunSock.rotation.x = Math.PI / 2;
+  pelvis.add(gunSock);
 
   group.rotation.y = facing > 0 ? 0 : Math.PI;
 
+  const holsterCtl = makeGunHolster(gun, gunSock, elbowR);
+  // Hand-on-holster pose: solved once against the holstered grip.
+  let handPose: [number, number, number] | null = null;
+  function holsterPose(): [number, number, number] {
+    if (handPose) return handPose;
+    const restParent = gun.parent;
+    holsterCtl.holster();
+    group.updateMatrixWorld(true);
+    const target = grip.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.03, 0));
+    handPose = solveHandPose(group, armR, elbowR, handR, target);
+    if (restParent === elbowR) holsterCtl.drawStep(1); // leave the gun where it was
+    return handPose;
+  }
   function setGunsDown(): void {
+    if (holsterCtl.gunState() === "holster") {
+      const [ax, az, ex] = holsterPose(); // hand resting on the holstered grip
+      armR.rotation.set(ax, 0, az);
+      elbowR.rotation.x = ex;
+      return;
+    }
     armR.rotation.set(0.55, 0, 0); // muzzle toward dirt (standoff pose)
     elbowR.rotation.x = -0.25;
   }
@@ -219,6 +329,10 @@ export function createCowboy(opts: {
     // (+X rotation pitches +Z muzzle DOWN, so PI/2 aims at the dirt).
     armR.rotation.set(0.05, 0, 0);
     elbowR.rotation.x = 0;
+  }
+  function holster(): void {
+    holsterCtl.holster();
+    setGunsDown();
   }
   function setFall(dead: boolean): void {
     group.rotation.x = dead ? -Math.PI / 2 + 0.12 : 0;
@@ -247,5 +361,5 @@ export function createCowboy(opts: {
     hips: null, // legs hang off the group, no pelvis node to turn
     sign: 1 as const,
   };
-  return { group, armR, elbowR, gunTip, parts, joints, setGunsDown, setRaised, setFall };
+  return { group, armR, elbowR, gunTip, parts, joints, setGunsDown, setRaised, setFall, gun, holster, drawStep: holsterCtl.drawStep, gunState: holsterCtl.gunState };
 }
