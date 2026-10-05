@@ -47,6 +47,184 @@ export const NIGHT: TimeOfDay = {
   fogDensity: 0.016,
 };
 
+// HiDPI: render at device pixels (capped) so phones/retina aren't upscaled
+// blurry. The cap only ever drops (frame-time watchdog in noteFrame) and is
+// module-level so a slow device stays at 1x for every later duel.
+let pixelRatioCap = 2;
+
+// Duelist shadows are DECALS, not a shadow map: a real-time map (PCF
+// lookups on every street pixel + a depth pass of ~100 cowboy meshes) cost
+// ~40% frame time on software GL. One soft quad per duelist instead: a
+// contact blob at the feet + a streak along the baked sun (light at
+// (6,10,4) -> shadows fall toward -x/-z, ~0.72m per metre of height).
+const SUN_SHADOW_DIR = new THREE.Vector3(-6, 0, -4).normalize();
+const SHADOW_PER_M = Math.hypot(6, 4) / 10;
+let shadowTex: THREE.CanvasTexture | null = null;
+function shadowTexture(): THREE.CanvasTexture {
+  if (shadowTex) return shadowTex;
+  const cv = document.createElement("canvas");
+  cv.width = 256;
+  cv.height = 64;
+  const g = cv.getContext("2d")!;
+  // Streak: soft capsule fading toward the far end (u = 0 at the feet).
+  const lin = g.createLinearGradient(0, 0, 256, 0);
+  lin.addColorStop(0, "rgba(0,0,0,0.75)");
+  lin.addColorStop(0.7, "rgba(0,0,0,0.45)");
+  lin.addColorStop(1, "rgba(0,0,0,0)");
+  g.filter = "blur(6px)";
+  g.fillStyle = lin;
+  g.beginPath();
+  g.ellipse(128, 32, 116, 18, 0, 0, Math.PI * 2);
+  g.fill();
+  g.filter = "none";
+  // Contact blob under the feet (darkest, always there).
+  const rad = g.createRadialGradient(34, 32, 0, 34, 32, 30);
+  rad.addColorStop(0, "rgba(0,0,0,0.85)");
+  rad.addColorStop(1, "rgba(0,0,0,0)");
+  g.fillStyle = rad;
+  g.fillRect(0, 0, 80, 64);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  shadowTex = tex;
+  return tex;
+}
+
+export interface ShadowDecal {
+  /** feet = world XZ under the duelist; heightM = how tall they stand now
+   *  (wound pose), lying = corpse (shadow pools round under the body). */
+  place(feet: THREE.Vector3, heightM: number, lying: boolean): void;
+  /** 0..1 darkness (sun strength by time of day). */
+  setStrength(k: number): void;
+  dispose(): void;
+}
+
+export function createShadowDecal(scene: THREE.Scene): ShadowDecal {
+  const geo = new THREE.PlaneGeometry(1, 1);
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(0.5, 0, 0); // local +x = along the shadow, origin at the near end
+  const mat = new THREE.MeshBasicMaterial({
+    map: shadowTexture(),
+    color: 0x2a1606,
+    transparent: true,
+    opacity: 0.4,
+    depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.rotation.y = Math.atan2(-SUN_SHADOW_DIR.z, SUN_SHADOW_DIR.x); // +x -> sun shadow dir
+  mesh.renderOrder = 1; // over the floor + ruts, under the duelists' sprites
+  scene.add(mesh);
+  return {
+    place(feet, heightM, lying) {
+      const len = lying ? 1.5 : 0.45 + heightM * SHADOW_PER_M;
+      // Wide in depth on purpose: the ~6 deg view squashes depth ~10x.
+      const wid = lying ? 1.2 : 0.85;
+      mesh.scale.set(len, 1, wid);
+      // Start a little behind the feet so the contact blob sits under them.
+      const back = lying ? 0.75 : 0.28;
+      mesh.position.set(feet.x - SUN_SHADOW_DIR.x * back, 0.03, feet.z - SUN_SHADOW_DIR.z * back);
+    },
+    setStrength(k) {
+      mat.opacity = Math.max(0, Math.min(1, k));
+    },
+    dispose() {
+      scene.remove(mesh);
+      geo.dispose();
+      mat.dispose();
+    },
+  };
+}
+
+// Procedural dirt detail (zero shipped bytes): a greyscale tileable map
+// (0.5 = neutral) multiplied onto the street floor in WORLD XZ, so the arena
+// ground and the street GLB's own ground band (vertex colours, no UVs) get
+// the identical pattern and meet without a seam. The ortho camera sees the
+// floor at ~6 deg (depth foreshortened ~10x), so it repeats every 10m across
+// but 50m in depth: round marks read as round-ish on screen. Seeded.
+let dirtTex: THREE.CanvasTexture | null = null;
+function dirtDetailTexture(): THREE.CanvasTexture {
+  if (dirtTex) return dirtTex;
+  const S = 512;
+  const cv = document.createElement("canvas");
+  cv.width = S;
+  cv.height = S;
+  const g = cv.getContext("2d")!;
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  g.fillStyle = "rgb(128,128,128)";
+  g.fillRect(0, 0, S, S);
+  const wrapped = (x: number, y: number, r: number, draw: (x: number, y: number) => void) => {
+    for (const ox of [-S, 0, S]) for (const oy of [-S, 0, S]) {
+      if (x + ox + r < 0 || x + ox - r > S || y + oy + r < 0 || y + oy - r > S) continue;
+      draw(x + ox, y + oy);
+    }
+  };
+  // Low-frequency mottling (soft light/dark blotches).
+  for (let i = 0; i < 46; i++) {
+    const x = rnd() * S, y = rnd() * S, r = 30 + rnd() * 90;
+    const v = rnd() < 0.55 ? 0 : 255;
+    const a = 0.12 + rnd() * 0.16;
+    wrapped(x, y, r, (cx, cy) => {
+      const gr = g.createRadialGradient(cx, cy, 0, cx, cy, r);
+      gr.addColorStop(0, `rgba(${v},${v},${v},${a})`);
+      gr.addColorStop(1, `rgba(${v},${v},${v},0)`);
+      g.fillStyle = gr;
+      g.fillRect(cx - r, cy - r, r * 2, r * 2);
+    });
+  }
+  // Pebbles + clods: small dark flecks with a sunlit top edge.
+  for (let i = 0; i < 260; i++) {
+    const x = rnd() * S, y = rnd() * S, r = 0.8 + rnd() * 1.8;
+    const a = 0.35 + rnd() * 0.4;
+    wrapped(x, y, r + 1, (cx, cy) => {
+      g.fillStyle = `rgba(20,20,20,${a})`;
+      g.beginPath();
+      g.ellipse(cx, cy, r * 1.3, r, 0, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = "rgba(255,255,255,0.5)";
+      g.fillRect(cx - r, cy - r - 0.6, r * 1.6, 0.8);
+    });
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.NoColorSpace; // data, not colour
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  dirtTex = tex;
+  return tex;
+}
+
+/** Multiply the dirt detail onto a Lambert material's fragments that sit at
+ *  floor height (world y < maxY). `axis` = the duel direction (sets the
+ *  stretched repeat). Same texture + projection everywhere = no seams. */
+export function addDirtDetail(
+  mat: THREE.Material,
+  axis: THREE.Vector3,
+  maxY: number,
+): void {
+  const tex = dirtDetailTexture();
+  // No anisotropic filtering: the texture is pre-stretched 5x in depth, and
+  // 4x aniso cost ~25% frame time on software GL (CrazyGames low-end QA).
+  tex.anisotropy = 1;
+  const a = axis.clone().setY(0).normalize();
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uDirt = { value: tex };
+    sh.uniforms.uDirtAx = { value: new THREE.Vector4(-a.z / 10, a.x / 10, a.x / 50, a.z / 50) };
+    sh.uniforms.uDirtMaxY = { value: maxY };
+    sh.vertexShader = sh.vertexShader
+      .replace("#include <common>", "#include <common>\nvarying vec3 vDirtW;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvDirtW = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+    sh.fragmentShader = sh.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying vec3 vDirtW;\nuniform sampler2D uDirt;\nuniform vec4 uDirtAx;\nuniform float uDirtMaxY;")
+      .replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+        if (vDirtW.y < uDirtMaxY) {
+          vec2 duv = vec2(dot(vDirtW.xz, uDirtAx.xy), dot(vDirtW.xz, uDirtAx.zw));
+          diffuseColor.rgb *= 1.0 + (texture2D(uDirt, duv).r - 0.5) * 0.6;
+        }`,
+      );
+  };
+  mat.needsUpdate = true;
+}
+
 /** roundIndex (0-based) → TimeOfDay preset. */
 export function timeOfDayForRound(i: number): TimeOfDay {
   if (i <= 0) return NOON;
@@ -88,11 +266,19 @@ export function createArena(distM: number): {
   getHalfH(): number;
   setTimeOfDay(t: TimeOfDay): void;
   fitCamera(): void;
+  /** Feed every rendered frame's dt: sustained slow frames drop HiDPI to 1x. */
+  noteFrame(dt: number): void;
 } {
   const scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2(NOON.fogColor, NOON.fogDensity);
+  const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
 
-  const camera = new THREE.OrthographicCamera(-8, 8, 4.5, -4.5, 0.1, 200);
+  // Negative near (legal for ortho): the bottom rows' rays start BELOW the
+  // ground at the camera plane, so with near > 0 they never met it and showed
+  // a fake under-ground skirt (ruts/shadows/lava cut off in a hard line).
+  // Extending the frustum behind the camera lets them hit the real ground
+  // ~12m back. FogExp2 squares depth, so negative depths fog the same.
+  const camera = new THREE.OrthographicCamera(-8, 8, 4.5, -4.5, -40, 200);
   // Tight over-the-gun-shoulder 3rd person (locked): the camera rides just
   // above + behind the player's gun-side shoulder and looks past the head
   // at the foe. The whole player stays in front of the near plane, so the
@@ -114,6 +300,8 @@ export function createArena(distM: number): {
 
   const hemi = new THREE.HemisphereLight(0xfff2dd, 0x8a6f4d, NOON.hemiIntensity);
   const dir = new THREE.DirectionalLight(NOON.dirColor, NOON.dirIntensity);
+  // Same sun the street bake ray-casts from (build_street.py SUN_FROM);
+  // the duelists' shadow decals (createShadowDecal) fall along it too.
   dir.position.set(6, 10, 4);
   // Fill from the camera side: the chase cam stares at the player's BACK
   // all duel, and with only a frontal key the coat tails + vest fell to
@@ -125,42 +313,25 @@ export function createArena(distM: number): {
   // Ground: dusty main street + wagon ruts running down the duel line.
   // Oversized on purpose: at narrow aspects the ortho frustum reaches far
   // past the duel, and any unbuilt pixel shows page background as a band.
-  // Sized to the skirt (600x400) so no ground-edge seam can enter frame.
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(600, 400),
-    new THREE.MeshLambertMaterial({ color: 0xd9b380 }),
-  );
+  // Dirt detail in world XZ (shared with the street GLB's ground band).
+  const groundMat = new THREE.MeshLambertMaterial({ color: 0xd9b380 });
+  addDirtDetail(groundMat, duelDir, 1);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(600, 400), groundMat);
   ground.rotation.x = -Math.PI / 2;
   scene.add(ground);
   // Lit (not Basic): unlit ruts glowed as bright stripes at night / in hell.
+  // Long enough to run under the camera: the bottom rows see the ground
+  // ~12m behind it (negative near plane above).
   const rutMat = new THREE.MeshLambertMaterial({ color: 0xb08c5a });
-  const rutMid = pPos.clone().lerp(fPos, 0.5).addScaledVector(duelDir, 6);
+  const rutMid = pPos.clone().lerp(fPos, 0.5).addScaledVector(duelDir, -10);
   const rutPerp = new THREE.Vector3(-duelDir.z, 0, duelDir.x);
   const rutYaw = Math.atan2(duelDir.x, duelDir.z);
   for (const s of [-0.9, 0.9]) {
-    const rut = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.02, 46), rutMat);
+    const rut = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.02, 90), rutMat);
     rut.position.copy(rutMid).addScaledVector(rutPerp, s);
     rut.position.y = 0.012;
     rut.rotation.y = rutYaw;
     scene.add(rut);
-  }
-
-  // Foreground skirt: the ortho frustum's lowest rows start BELOW y=0 at
-  // lookAt depth and travel onward underneath the ground plane (parallel
-  // ortho rays never come back up) — without a catcher the transparent
-  // canvas showed the page gradient as a band. Same street tone (seamless
-  // join) and huge enough for the narrowest QA aspect.
-  {
-    const mid0 = pPos.clone().lerp(fPos, 0.5);
-    const skirt = new THREE.Mesh(
-      new THREE.PlaneGeometry(600, 400),
-      // fog off: its rays travel far past the visible ground, so fog tinted
-      // it into a hard purple/red band under the street at night and in hell.
-      new THREE.MeshLambertMaterial({ color: 0xd9b380, fog: false }),
-    );
-    skirt.rotation.x = -Math.PI / 2;
-    skirt.position.set(mid0.x, -5, mid0.z);
-    scene.add(skirt);
   }
 
   // Sun disc (photo's pale sun), fixed to face the static camera.
@@ -172,11 +343,12 @@ export function createArena(distM: number): {
   sun.lookAt(camera.position);
   scene.add(sun);
 
-  // Duel markers at the staged feet.
+  // Duel markers at the staged feet: a faint scuffed circle (the sun
+  // shadows carry the contact now).
   const { player, foe } = { player: pPos, foe: fPos };
-  const markerMat = new THREE.MeshBasicMaterial({ color: 0x6b543a });
+  const markerMat = new THREE.MeshBasicMaterial({ color: 0x6b543a, transparent: true, opacity: 0.45, depthWrite: false });
   for (const p of [player, foe]) {
-    const m = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.62, 24), markerMat);
+    const m = new THREE.Mesh(new THREE.RingGeometry(0.52, 0.6, 32), markerMat);
     m.rotation.x = -Math.PI / 2;
     m.position.set(p.x, 0.02, p.z);
     scene.add(m);
@@ -492,6 +664,9 @@ export function createArena(distM: number): {
     const host = renderer.domElement.parentElement;
     const w = host ? host.clientWidth : window.innerWidth;
     const h = host ? host.clientHeight : window.innerHeight;
+    // Hit tests/aim read getBoundingClientRect (CSS px), so the backing
+    // store's pixel ratio never changes gameplay.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, coarse ? 1.5 : 2, pixelRatioCap));
     renderer.setSize(w, h, false);
     const aspect = w / Math.max(1, h);
     // Over-shoulder: the player is foreground (always in frame), so the
@@ -506,6 +681,27 @@ export function createArena(distM: number): {
     camera.updateProjectionMatrix();
   }
 
+  // Watchdog: after a short warm-up, a 1s window averaging > 22ms/frame
+  // (its single longest frame left out, so one shader-compile or GLB-swap
+  // stall can't trip it) while above 1x drops to 1x for the session. Short
+  // so a slow device leaves the heavy ratio before the Focus QTE matters.
+  let warm = 0, winT = 0, winN = 0, winMax = 0;
+  function noteFrame(dt: number): void {
+    if (renderer.getPixelRatio() <= 1) return;
+    if (warm < 0.75) { warm += dt; return; }
+    winT += dt;
+    winN += 1;
+    winMax = Math.max(winMax, dt);
+    if (winT < 1) return;
+    if (winN > 1 && (winT - winMax) / (winN - 1) > 0.022) {
+      pixelRatioCap = 1;
+      fitCamera();
+    }
+    winT = 0;
+    winN = 0;
+    winMax = 0;
+  }
+
   return {
     scene,
     camera,
@@ -513,5 +709,6 @@ export function createArena(distM: number): {
     getHalfH: () => halfH,
     setTimeOfDay,
     fitCamera,
+    noteFrame,
   };
 }

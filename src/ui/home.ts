@@ -1,9 +1,10 @@
 import * as THREE from "three";
-import { createArena, stagePositions, faceToward, timeOfDayForRound, cssSkyForRound } from "../render/arena";
+import { createArena, stagePositions, faceToward, timeOfDayForRound, cssSkyForRound, createShadowDecal, type ShadowDecal } from "../render/arena";
 import { createCowboy, type Cowboy } from "../render/cowboy";
 import { loadCowboyGlb, swapCowboy, type CowboyGlb } from "../render/cowboyGlb";
 import { loadStreetGlb, type StreetSet } from "../render/streetGlb";
 import { createGunsmoke } from "../render/smoke";
+import { createAmbient } from "../render/ambient";
 import { createFixedStepper, STEP, MAX_FRAME_DT } from "../game/fixedStep";
 import { createRagdoll, bindAccessories, type Ragdoll } from "../render/ragdoll";
 import { DuelMachine, type WoundPose } from "../game/DuelMachine";
@@ -233,13 +234,17 @@ function runDuel(
   const rIdx = series?.roundIndex ?? (run ? run.streak % AI_ROSTER.length : 0);
   const level = run ? Math.floor(run.streak / AI_ROSTER.length) : 0;
 
-  const { scene, camera, renderer, getHalfH, fitCamera, setTimeOfDay } = createArena(distM);
+  const { scene, camera, renderer, getHalfH, fitCamera, setTimeOfDay, noteFrame } = createArena(distM);
   // Time-of-day driver: R1 noon → R2 evening → R3+ night. Hell overrides.
   setTimeOfDay(timeOfDayForRound(hellRound ? 2 : rIdx));
   document.body.style.background = hellRound
     ? "linear-gradient(#0d0202 0%, #3a0a06 60%, #ff3a12 100%)"
     : cssSkyForRound(rIdx);
   root.appendChild(renderer.domElement);
+  // Lens vignette (CSS, plain alpha): darker variant for night + hell.
+  const vignette = el(`<div class="vignette"></div>`);
+  vignette.classList.toggle("dark", hellRound || rIdx >= 2);
+  root.appendChild(vignette);
   fitCamera();
   // Hell visuals: lazy chunk, never in the initial payload (QA gate). The
   // import() splits into its own chunk; by the 2nd duel GameplayStart has
@@ -258,6 +263,12 @@ function runDuel(
   // Pooled gunsmoke + muzzle flash (procedural, zero shipped bytes). Player
   // and foe share this pool (Slice-2 AI path calls the same spawn).
   const gunsmoke = createGunsmoke(scene);
+  // Unlit smoke/dust sprites follow the scene's light level (noon → night).
+  const spriteLight = (i: number, hell: boolean) => (hell ? 0.5 : [1, 0.8, 0.4][Math.min(i, 2)]);
+  gunsmoke.setAmbient(spriteLight(rIdx, hellRound));
+  // Air particles: dust motes / fireflies / embers by time of day.
+  const ambientFx = createAmbient(scene, distM);
+  ambientFx.setTimeOfDay(rIdx, hellRound);
 
   // True projectiles (Slice 1): pooled sim + visible bullet meshes. Net seam:
   // every shot emits Fire{pos,dir,gunId,tick} / Hit{tick,head,damage} over
@@ -265,28 +276,36 @@ function runDuel(
   const sim = new ProjectileSim();
   const transport = new LocalTransport();
   transport.onCmd(() => { /* net-ready envelope; local sim resolves inline */ });
-  const bulletGeo = new THREE.SphereGeometry(0.055, 8, 6);
-  const bulletMat = new THREE.MeshBasicMaterial({ color: 0xfff4d0, fog: false });
+  // Tracer streak (was a 5cm dot): a thin bar trailing 0.7m behind the
+  // bullet's head, aimed along its travel each frame (lookAt aims +Z).
+  const bulletGeo = new THREE.BoxGeometry(0.035, 0.035, 0.7);
+  bulletGeo.translate(0, 0, -0.35);
+  const bulletMat = new THREE.MeshBasicMaterial({ color: 0xffe2a0, fog: false, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
   // prev/cur = bullet position before/after the latest fixed step; rendered
   // interpolated by alpha so flight is smooth at any refresh rate (60Hz steps
   // alone made bullets hop 1.8m per step on 120/144/165Hz displays).
-  type BulletView = { mesh: THREE.Mesh; b: BulletState | null; prev: THREE.Vector3; cur: THREE.Vector3 };
+  // spent = the view struck dirt/a facade (cosmetic only: the sim bullet
+  // keeps flying, so in-flight/double-KO rules are untouched).
+  type BulletView = { mesh: THREE.Mesh; b: BulletState | null; prev: THREE.Vector3; cur: THREE.Vector3; spent: boolean };
   const bulletViews: BulletView[] = [];
   for (let i = 0; i < 8; i++) {
     const mesh = new THREE.Mesh(bulletGeo, bulletMat);
     mesh.visible = false;
     scene.add(mesh);
-    bulletViews.push({ mesh, b: null, prev: new THREE.Vector3(), cur: new THREE.Vector3() });
+    bulletViews.push({ mesh, b: null, prev: new THREE.Vector3(), cur: new THREE.Vector3(), spent: false });
   }
   function showBullet(b: BulletState): void {
     const v = bulletViews.find((x) => x.b === null || x.b.alive === false);
     if (!v) return;
     v.b = b;
+    v.spent = false;
     v.mesh.visible = true;
     v.prev.set(b.pos[0], b.pos[1], b.pos[2]);
     v.cur.copy(v.prev);
     v.mesh.position.copy(v.prev);
+    v.mesh.lookAt(tmpAim.set(b.pos[0] + b.vel[0], b.pos[1] + b.vel[1], b.pos[2] + b.vel[2]));
   }
+  const tmpAim = new THREE.Vector3();
   /** Before a fixed step: prev <- cur. */
   function bulletsBeginStep(): void {
     for (const v of bulletViews) if (v.b && v.b.alive) v.prev.copy(v.cur);
@@ -298,9 +317,11 @@ function runDuel(
   /** Per rendered frame. */
   function renderBullets(alpha: number): void {
     for (const v of bulletViews) {
-      if (!v.b || !v.b.alive) { v.mesh.visible = false; continue; }
+      if (!v.b || !v.b.alive || v.spent) { v.mesh.visible = false; continue; }
       v.mesh.visible = true;
       v.mesh.position.lerpVectors(v.prev, v.cur, alpha);
+      tmpAim.subVectors(v.cur, v.prev);
+      if (tmpAim.lengthSq() > 1e-8) v.mesh.lookAt(tmpAim.add(v.mesh.position));
     }
   }
 
@@ -314,6 +335,11 @@ function runDuel(
   foe.group.position.copy(stage.foe);
   faceToward(foe.group, stage.foe, stage.player);
   scene.add(player.group, foe.group);
+  // Sun shadow decals (cheap stand-in for a shadow map; see arena.ts).
+  const shadowStrength = (i: number, hell: boolean) => (hell ? 0.4 : [0.62, 0.66, 0.3][Math.min(i, 2)]);
+  const playerShadow = createShadowDecal(scene);
+  const foeShadow = createShadowDecal(scene);
+  for (const d of [playerShadow, foeShadow]) d.setStrength(shadowStrength(rIdx, hellRound));
   // Accessories (hat, pads, belt, boots…) ride the nearest body part so no
   // detail freezes mid-air on death. Done before doll creation (attach
   // preserves world transforms, so body snapshots stay exact).
@@ -556,10 +582,18 @@ function runDuel(
         phase: machine.phase, paused: machine.paused, bloom: machine.bloomDeg,
         secsLeft: machine.focusTicksLeft() / 60,
       }),
+      /** Last frame's draw calls / triangles + backing pixel ratio (perf). */
+      info: () => ({ ...renderer.info.render, pr: renderer.getPixelRatio() }),
+      /** Live gunsmoke/dust/flash sprite counts (impact-FX checks). */
+      fx: () => gunsmoke.live(),
       /** Look-dev: force round i's time of day + street glow; hell=true
           also drops the hell set in (street captures, not gameplay). */
       tod: (i: number, hell = false) => {
         setTimeOfDay(timeOfDayForRound(hell ? 2 : i));
+        gunsmoke.setAmbient(spriteLight(i, hell));
+        ambientFx.setTimeOfDay(i, hell);
+        vignette.classList.toggle("dark", hell || i >= 2);
+        for (const d of [playerShadow, foeShadow]) d.setStrength(shadowStrength(i, hell));
         street?.setGlow(hell ? 1 : [0, 0.55, 1][Math.min(i, 2)]);
         if (hell) void import("../render/hell").then((m) => m.enterHell(scene));
       },
@@ -713,6 +747,12 @@ function runDuel(
   }
 
   const cue = hud.querySelector(".cue") as HTMLElement;
+  /** Restart the cue's one-shot punch animation (text is untouched). */
+  function popCue(): void {
+    cue.classList.remove("pop");
+    void cue.offsetWidth; // reflow so the animation restarts
+    cue.classList.add("pop");
+  }
   const sub = hud.querySelector(".sub") as HTMLElement;
   const youBar = hp.querySelector(".you i") as HTMLElement;
   const foeBar = hp.querySelector(".foe i") as HTMLElement;
@@ -1139,7 +1179,9 @@ function runDuel(
     // revive overlay (token / buy / ad / stay down) had no pointer at all.
     document.body.classList.remove("in-duel");
     cross.style.display = "none";
+    if (foeHP <= 0 || playerHP <= 0) punchT = 0;
     cue.textContent = text;
+    popCue();
     sub.textContent = subText;
     // Real gold flow (Slice 7): flat win + consolation + kill bonus.
     const prog = adapter.loadProgress();
@@ -1431,6 +1473,28 @@ function runDuel(
     bulletsEndStep();
   }
 
+  // Cosmetic miss impacts, on the fixed clock (deterministic at any Hz): a
+  // bullet view that reaches the dirt, or flies ~8m past the foe into the
+  // storefronts, puffs dust and hides. The sim bullet is left alone.
+  const duelAxis = stage.foe.clone().sub(stage.player).setY(0).normalize();
+  const impactAt = new THREE.Vector3();
+  function bulletImpacts(): void {
+    for (const v of bulletViews) {
+      const b = v.b;
+      if (!b || !b.alive || v.spent) continue;
+      impactAt.set(b.pos[0], b.pos[1], b.pos[2]);
+      const dir = new THREE.Vector3(b.vel[0], b.vel[1], b.vel[2]).normalize();
+      if (b.pos[1] <= 0.03) {
+        v.spent = true;
+        impactAt.y = 0.06;
+        gunsmoke.dust(impactAt, dir, "ground");
+      } else if (b.shooter === "player" && b.pos[1] < 7 && impactAt.clone().sub(stage.foe).dot(duelAxis) > 8) {
+        v.spent = true;
+        gunsmoke.dust(impactAt, dir, "wood");
+      }
+    }
+  }
+
   function checkBulletHits(): void {
     for (const b of sim.bullets) {
       if (!b.alive) continue;
@@ -1440,6 +1504,7 @@ function runDuel(
           sim.kill(b);
           const point = new THREE.Vector3(r.point[0], r.point[1], r.point[2]);
           const dir = new THREE.Vector3(b.vel[0], b.vel[1], b.vel[2]).normalize();
+          gunsmoke.dust(point, dir, "body");
           transport.send({ type: "Hit", tick: machine.tick, head: r.head, damage: r.head ? 999 : bodyDamage(gun.baseDamage, distM) });
           if (r.head) { killFoe(true, point, dir); }
           else {
@@ -1454,6 +1519,7 @@ function runDuel(
           sim.kill(b);
           const point = new THREE.Vector3(r.point[0], r.point[1], r.point[2]);
           const dir = new THREE.Vector3(b.vel[0], b.vel[1], b.vel[2]).normalize();
+          gunsmoke.dust(point, dir, "body");
           transport.send({ type: "Hit", tick: machine.tick, head: r.head, damage: r.head ? 999 : bodyDamage(GUNS.default.baseDamage, distM) });
           if (r.head) hitPlayer(true, 999, point, dir);
           else {
@@ -1587,6 +1653,9 @@ function runDuel(
     root.removeEventListener("pointerup", onPointerUp);
     root.removeEventListener("pointercancel", onPointerUp);
     focusUI.destroy();
+    ambientFx.dispose();
+    playerShadow.dispose();
+    foeShadow.dispose();
     cancelAnimationFrame(raf);
     renderer.dispose();
   }
@@ -1658,16 +1727,27 @@ function runDuel(
   const shoulder = new THREE.Vector3();
   const aimDir = new THREE.Vector3();
   let swayT = 0;
+  let punchT = -1;
 
   // Initial cue per device.
   cue.textContent = "HOLSTER UP";
   sub.textContent = coarse ? "TAP the holster zone to begin" : "Move your mouse INTO the holster zone";
   updateZone();
 
+  // Shadow decal rides the pelvis (so it follows the ragdoll), shortens with
+  // the wound pose (a crouch casts less), pools round under a corpse.
+  const shadowFeet = new THREE.Vector3();
+  function placeShadow(d: ShadowDecal, c: Cowboy, wound: WoundPose, hp: number, doll: Ragdoll | null): void {
+    const src = c.parts.pelvis ?? c.group;
+    src.getWorldPosition(shadowFeet);
+    d.place(shadowFeet, CAPSULE_FOR_POSE[wound].headY, hp <= 0 || !!doll?.fallen);
+  }
+
   function frame(): void {
     if (!alive) return;
     raf = requestAnimationFrame(frame);
     const dt = Math.min(clock.getDelta(), 0.1);
+    noteFrame(dt);
     // ONE fixed clock for all physics (spec: consistent across 60/144/165Hz,
     // delta-time not frame count). Rendering interpolates by alpha below.
     const alpha = stepper.advance(dt, () => {
@@ -1680,6 +1760,7 @@ function runDuel(
       if (machine.phase === "draw") machine.regrow(STEP);
       else if (machine.phase === "fire") machine.recover(STEP, gun.recoilRecoveryDegPerSec);
       stepBullets();
+      bulletImpacts();
       // Corpse physics lives on the same fixed clock (null-safe).
       try { if (foeDoll?.fallen) foeDoll.fixedStep(STEP); } catch { /* fallback already fell */ }
       try { if (playerDoll?.fallen) playerDoll.fixedStep(STEP); } catch { /* noop */ }
@@ -1778,6 +1859,7 @@ function runDuel(
     } else if ((machine.phase === "draw" || machine.phase === "fire") && !tracking) {
       tracking = true;
       cue.textContent = hellRound ? "DRAW! — HELL (1 BULLET)" : "DRAW!";
+      popCue();
       sub.textContent = coarse ? "Drag to aim · tap to fire!" : "Aim with mouse · click to fire!";
       focusUI.setVisible(false);
       zone.style.display = "none";
@@ -1832,9 +1914,21 @@ function runDuel(
     // is final, so the shoulder mount cancels exactly what renders.
     stabilizeArm(foe, foeHP, foeDoll);
     stabilizeArm(player, playerHP, playerDoll);
+    placeShadow(foeShadow, foe, foeWound, foeHP, foeDoll);
+    placeShadow(playerShadow, player, playerWound, playerHP, playerDoll);
 
     gunsmoke.update(dt);
-    street?.tick(performance.now() / 1000);
+    // Kill punch: a short ortho push-in once the round is decided. Only
+    // after roundOver (aim/hit tests read the camera; they're off by then).
+    if (punchT >= 0 && punchT < 0.6) {
+      punchT += dt;
+      const u = Math.min(1, punchT / 0.45);
+      camera.zoom = 1 + 0.06 * (1 - (1 - u) * (1 - u) * (1 - u));
+      camera.updateProjectionMatrix();
+    }
+    const nowSec = performance.now() / 1000;
+    street?.tick(nowSec);
+    ambientFx.tick(nowSec, renderer.getPixelRatio());
     renderer.render(scene, camera);
   }
   frame();

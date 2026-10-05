@@ -11,8 +11,20 @@ import * as THREE from "three";
 
 const SMOKE_POOL = 12;
 const FLASH_POOL = 4;
+const DUST_POOL = 16;
 const SMOKE_LIFE = 0.8;
 const FLASH_LIFE = 0.07; // ~2 frames at 60Hz + margin
+const DUST_LIFE = 0.75;
+
+/** body = hit on a duelist (the locked "no blood, dust puff only"),
+ *  ground = a miss striking the street, wood = a miss striking a facade.
+ *  Lighter than what they land on (sunlit dust), so they read on tan dirt. */
+export type DustKind = "body" | "ground" | "wood";
+const DUST: Record<DustKind, { color: number; n: number; size: number; speed: number }> = {
+  body: { color: 0xdcc39a, n: 5, size: 0.7, speed: 1.6 },
+  ground: { color: 0xf0dcb2, n: 4, size: 0.7, speed: 1.0 },
+  wood: { color: 0xf6e8cc, n: 4, size: 0.6, speed: 0.9 },
+};
 
 function puffTexture(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
@@ -36,19 +48,35 @@ interface Puff {
   seed: number;
 }
 
+interface Dust extends Puff {
+  vel: THREE.Vector3;
+  size: number;
+}
+
 export interface Gunsmoke {
   /** Spawn one wisp + one flash at a world pos. */
   spawn(pos: THREE.Vector3): void;
+  /** Dust burst at an impact point, kicked along the bullet direction. */
+  dust(pos: THREE.Vector3, dir: THREE.Vector3, kind: DustKind): void;
+  /** Scene light level 0..1 for the unlit smoke/dust sprites (noon 1,
+   *  night low) so they never glow brighter than the world around them. */
+  setAmbient(k: number): void;
   /** Advance all live puffs/flashes. Call every frame. */
   update(dt: number): void;
+  /** Live sprite counts (DEV probes / tests). */
+  live(): { smoke: number; dust: number; flash: number };
 }
 
 export function createGunsmoke(scene: THREE.Scene): Gunsmoke {
   const shared = puffTexture();
   const smokes: Puff[] = [];
   const flashes: Puff[] = [];
+  const dusts: Dust[] = [];
   let nextSmoke = 0;
   let nextFlash = 0;
+  let nextDust = 0;
+  let ambient = 1;
+  const smokeBase = new THREE.Color(0xf5f0e6);
 
   for (let i = 0; i < SMOKE_POOL; i++) {
     const mat = new THREE.SpriteMaterial({
@@ -79,6 +107,20 @@ export function createGunsmoke(scene: THREE.Scene): Gunsmoke {
     scene.add(s);
     flashes.push({ sprite: s, life: -1, seed: i });
   }
+  for (let i = 0; i < DUST_POOL; i++) {
+    const mat = new THREE.SpriteMaterial({
+      map: shared,
+      color: 0xd8bf94,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    });
+    const s = new THREE.Sprite(mat);
+    s.visible = false;
+    s.scale.setScalar(0.001);
+    scene.add(s);
+    dusts.push({ sprite: s, life: -1, seed: 0, vel: new THREE.Vector3(), size: 0.4 });
+  }
 
   function spawn(pos: THREE.Vector3): void {
     const p = smokes[nextSmoke];
@@ -100,6 +142,34 @@ export function createGunsmoke(scene: THREE.Scene): Gunsmoke {
     f.sprite.material.opacity = 1;
   }
 
+  function dust(pos: THREE.Vector3, dir: THREE.Vector3, kind: DustKind): void {
+    const cfg = DUST[kind];
+    for (let k = 0; k < cfg.n; k++) {
+      const d = dusts[nextDust];
+      nextDust = (nextDust + 1) % DUST_POOL;
+      d.life = 0;
+      d.size = cfg.size * (0.75 + Math.random() * 0.5);
+      d.sprite.visible = true;
+      d.sprite.position.copy(pos);
+      d.sprite.scale.setScalar(d.size * 0.3);
+      d.sprite.material.color.setHex(cfg.color).multiplyScalar(ambient);
+      d.sprite.material.opacity = 0.75;
+      // Kicked along the shot (out the far side of a body, back up off the
+      // dirt/wall), fanned out, with a little lift.
+      const out = kind === "body" ? 1 : -0.6;
+      d.vel.set(
+        dir.x * out + (Math.random() - 0.5) * 1.6,
+        0.3 + Math.random() * 0.9,
+        dir.z * out + (Math.random() - 0.5) * 1.6,
+      ).multiplyScalar(cfg.speed);
+    }
+  }
+
+  function setAmbient(k: number): void {
+    ambient = Math.max(0.15, Math.min(1, k));
+    for (const p of smokes) p.sprite.material.color.copy(smokeBase).multiplyScalar(ambient);
+  }
+
   function update(dt: number): void {
     const step = Math.min(dt, 0.1);
     for (const p of smokes) {
@@ -117,6 +187,23 @@ export function createGunsmoke(scene: THREE.Scene): Gunsmoke {
       p.sprite.position.x += Math.cos(p.seed) * step * 0.12;
       p.sprite.material.opacity = 0.5 * (1 - t);
     }
+    for (const d of dusts) {
+      if (d.life < 0) continue;
+      d.life += step;
+      const t = d.life / DUST_LIFE;
+      if (t >= 1) {
+        d.life = -1;
+        d.sprite.visible = false;
+        continue;
+      }
+      // Burst out fast, drag to a hang, slight fall; grow + fade.
+      const drag = Math.exp(-step * 5);
+      d.vel.multiplyScalar(drag);
+      d.vel.y -= step * 0.6;
+      d.sprite.position.addScaledVector(d.vel, step);
+      d.sprite.scale.setScalar(d.size * (0.35 + 0.65 * Math.sqrt(t)));
+      d.sprite.material.opacity = 0.75 * (1 - t);
+    }
     for (const f of flashes) {
       if (f.life < 0) continue;
       f.life += step;
@@ -133,5 +220,10 @@ export function createGunsmoke(scene: THREE.Scene): Gunsmoke {
     }
   }
 
-  return { spawn, update };
+  function live(): { smoke: number; dust: number; flash: number } {
+    const n = (a: Puff[]) => a.filter((p) => p.life >= 0).length;
+    return { smoke: n(smokes), dust: n(dusts), flash: n(flashes) };
+  }
+
+  return { spawn, dust, setAmbient, update, live };
 }

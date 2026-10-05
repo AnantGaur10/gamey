@@ -1,5 +1,13 @@
 /* Portal QA requirements: no text selection / double-tap zoom, safe-area aware. */
 * { box-sizing: border-box; }
+/* Western display face for titles + the duel cue. Rye (SIL OFL 1.1, licence
+   in fonts/OFL-Rye.txt), Latin subset, bundled with a relative URL: no
+   external request. swap = system font until it lands, never invisible text. */
+@font-face {
+  font-family: "Rye";
+  src: url("./assets/rye-latin.woff") format("woff");
+  font-display: swap;
+}
 html, body {
   margin: 0; padding: 0; height: 100%; overflow: hidden;
   /* Dusty midday sky. The gradient's lower half is dirt-toned on purpose:
@@ -22,10 +30,25 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 .hud { position: absolute; inset: 0; pointer-events: none; }
 .hud .cue {
   position: absolute; top: calc(10px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
-  font-weight: 800; letter-spacing: 0.12em; font-size: 34px;
-  color: #fff7e8; text-shadow: 0 2px 8px rgba(60, 20, 5, 0.9);
+  font-family: "Rye", Georgia, serif; font-weight: 400; letter-spacing: 0.06em; font-size: 32px;
+  color: #fff7e8; text-shadow: 0 2px 0 #4a2c10, 0 3px 10px rgba(60, 20, 5, 0.9);
   white-space: nowrap;
 }
+/* Cue punch (DRAW!, round result): one-shot scale + gold flash. Restarted by
+   toggling the class; text is untouched (tests match the cue words). */
+.hud .cue.pop { animation: cuepop 0.42s cubic-bezier(.2, 1.6, .4, 1); }
+@keyframes cuepop {
+  0% { transform: translateX(-50%) scale(1.7); color: #ffd678; opacity: 0.2; }
+  60% { transform: translateX(-50%) scale(0.96); color: #ffe9a8; opacity: 1; }
+  100% { transform: translateX(-50%) scale(1); }
+}
+/* Soft lens vignette over the 3D view (plain alpha, no blend modes: free to
+   composite). Darker at night/hell so the HUD and lit windows pop. */
+.vignette {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse 75% 70% at 50% 45%, rgba(0,0,0,0) 55%, rgba(40,18,6,0.28) 100%);
+}
+.vignette.dark { background: radial-gradient(ellipse 72% 66% at 50% 45%, rgba(0,0,0,0) 50%, rgba(4,2,10,0.5) 100%); }
 .hud .sub {
   position: absolute; top: calc(52px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
   font-size: 15px; opacity: 0.95; color: #fff2dc;
@@ -90,7 +113,7 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
   color: #ffe9bd; text-align: left; pointer-events: none;
   text-shadow: 0 2px 8px rgba(60, 20, 5, 0.95), 0 0 2px rgba(0, 0, 0, 0.9);
 }
-.qte .qlabel { display: block; font-weight: 800; letter-spacing: 0.08em; font-size: 15px; }
+.qte .qlabel { display: block; font-weight: 800; letter-spacing: 0.08em; font-size: 15px; white-space: nowrap; }
 .qte .qlabel b { background: #ffe9bd; color: #4a2c10; text-shadow: none; border-radius: 6px; padding: 1px 8px; margin-right: 2px; }
 .qte .qtrack {
   position: relative; display: block; height: 30px; margin-top: 8px; border-radius: 6px; overflow: hidden;
@@ -157,7 +180,7 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 /* Western showdown title: saloon-sign serif, gold leaf, deep wood shadow. */
 .menu h1 {
   margin: 0 0 10px; letter-spacing: 0.12em;
-  font-family: Georgia, "Times New Roman", serif; font-size: 54px; font-weight: 800;
+  font-family: "Rye", Georgia, "Times New Roman", serif; font-size: 54px; font-weight: 400;
   color: #ffd678; text-shadow: 0 3px 0 #4a2c10, 0 6px 22px rgba(0, 0, 0, 0.75);
 }
 .menu button {
@@ -183,7 +206,7 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 }
 .shop h2 {
   margin: 0 0 4px; letter-spacing: 0.14em;
-  font-family: Georgia, "Times New Roman", serif; font-size: 34px; color: #ffd678;
+  font-family: "Rye", Georgia, "Times New Roman", serif; font-size: 34px; color: #ffd678;
   text-shadow: 0 2px 0 #4a2c10, 0 5px 16px rgba(0, 0, 0, 0.8);
 }
 .shop > div { color: #ffe9bd; text-shadow: 0 1px 4px #000; font-size: 15px; }
@@ -204,8 +227,9 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 /* Menus use the OS cursor (never the duel crosshair). */
 .menu .crosshair, .shop .crosshair { display: none !important; }
 .revive button { cursor: pointer; }
-.skip { position: absolute; top: calc(10px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right)); pointer-events: auto; }
-.skip button { padding: 8px 12px; border-radius: 8px; border: 1px solid #888; background: #222; color: #eee; }
+/* Below the foe HP bar + ammo pips (it used to sit on top of the bar). */
+.skip { position: absolute; top: calc(62px + env(safe-area-inset-top)); right: calc(14px + env(safe-area-inset-right)); pointer-events: auto; }
+.skip button { padding: 7px 12px; border-radius: 8px; border: 1px solid rgba(212, 175, 55, 0.85); background: rgba(36, 20, 7, 0.82); color: #ffe9bd; font-weight: 800; letter-spacing: 0.06em; cursor: pointer; }
 .mute-btn { position: absolute; top: calc(10px + env(safe-area-inset-top)); right: calc(14px + env(safe-area-inset-right)); width: 44px; height: 44px; border-radius: 50%; background: rgba(255, 214, 120, 0.15); border: 2px solid rgba(255, 214, 120, 0.7); cursor: pointer; font-size: 22px; display: flex; align-items: center; justify-content: center; color: #ffe9bd; pointer-events: auto; transition: all 0.2s; font-weight: bold; }
 .mute-btn:hover { background: rgba(255, 214, 120, 0.25); border-color: rgba(255, 214, 120, 0.9); }
 .mute-btn:active { transform: scale(0.95); }

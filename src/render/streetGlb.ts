@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { stagePositions } from "./arena";
+import { stagePositions, addDirtDetail } from "./arena";
 
 /** Blender street set (scripts/blender/build_street.py) + its ambient life. */
 export interface StreetSet {
@@ -43,6 +43,9 @@ export async function loadStreetGlb(
     // ships no normals: Lambert + flatShading matches the arena's lighting
     // model (the ground band's edge melts into the arena plane) and is cheap.
     const paint = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+    // The ground band (y 0.004) gets the arena's world-XZ dirt detail so the
+    // two floors match.
+    addDirtDetail(paint, duelDir, 0.02);
     const glow = new THREE.MeshLambertMaterial({
       vertexColors: true,
       flatShading: true,

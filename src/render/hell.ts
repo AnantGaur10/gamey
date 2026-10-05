@@ -22,21 +22,14 @@ export function enterHell(scene: THREE.Scene): HellHandle {
 
   // dark rock disc over the dirt
   const rock = new THREE.Mesh(
-    new THREE.CircleGeometry(30, 28),
+    new THREE.CircleGeometry(45, 40),
     new THREE.MeshLambertMaterial({ color: 0x1c0f0c }),
   );
   rock.rotation.x = -Math.PI / 2;
   rock.position.y = 0.026; // above the arena ruts (top 0.022), below the lava (0.035+)
+  // Radius covers the ground the bottom rows see ~12m BEHIND the camera
+  // (arena's negative near plane), corners of the widest QA aspect included.
   scene.add(rock);
-  // Same rock over the arena's under-ground skirt (y=-5): the bottom rows of
-  // the ortho frame see that, not the disc, and it read as a tan band.
-  const rockUnder = new THREE.Mesh(
-    new THREE.PlaneGeometry(600, 400),
-    new THREE.MeshLambertMaterial({ color: 0x1c0f0c, fog: false }),
-  );
-  rockUnder.rotation.x = -Math.PI / 2;
-  rockUnder.position.y = -4.99;
-  scene.add(rockUnder);
 
   // emissive lava strips: scrolling shader, zero textures
   const lavaMat = new THREE.ShaderMaterial({
@@ -53,7 +46,7 @@ export function enterHell(scene: THREE.Scene): HellHandle {
   });
   const strips: THREE.Mesh[] = [];
   for (let i = 0; i < 3; i++) {
-    const s = new THREE.Mesh(new THREE.PlaneGeometry(36, 0.9), lavaMat);
+    const s = new THREE.Mesh(new THREE.PlaneGeometry(60, 0.9), lavaMat);
     s.rotation.x = -Math.PI / 2;
     s.position.set((i - 1) * 4, 0.035 + i * 0.004, -4 + i * 3.2);
     s.rotation.z = 0.12 * (i - 1);
@@ -73,14 +66,13 @@ export function enterHell(scene: THREE.Scene): HellHandle {
     dispose() {
       live = false;
       window.clearInterval(iv);
-      scene.remove(red, under, rock, rockUnder, ...strips);
+      scene.remove(red, under, rock, ...strips);
       scene.fog = prevFog;
       (scene as THREE.Scene & { background?: unknown }).background = prevBg;
       document.body.classList.remove("hell");
       lavaMat.dispose();
       (rock.geometry as THREE.BufferGeometry).dispose();
-      rockUnder.geometry.dispose();
-      (rockUnder.material as THREE.Material).dispose();
+      (rock.material as THREE.Material).dispose();
     },
   };
 }
