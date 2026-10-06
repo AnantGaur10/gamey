@@ -22,7 +22,7 @@ export const GUNS: Record<string, GunDef> = {
     id: "default",
     baseDamage: 49,
     bloomStartDeg: 2.4,
-    bloomMinDeg: 0.12, // floor cut to 20% (user 2026-10-05; was 0.6)
+    bloomMinDeg: 0.03, // user 2026-10-06 (was 0.12; 0.6 before 2026-10-05)
     focusPerTapDeg: 0.3,
     cooldownMs: 380,
     extra: "none",
@@ -32,7 +32,7 @@ export const GUNS: Record<string, GunDef> = {
     id: "lifesteal",
     baseDamage: 38,
     bloomStartDeg: 2.4,
-    bloomMinDeg: 0.14, // 20% of 0.7
+    bloomMinDeg: 0.035, // same ratio to default as before (was 0.14)
     focusPerTapDeg: 0.3,
     cooldownMs: 620,
     extra: "lifesteal",
@@ -42,7 +42,7 @@ export const GUNS: Record<string, GunDef> = {
     id: "gold",
     baseDamage: 37,
     bloomStartDeg: 2.4,
-    bloomMinDeg: 0.16, // 20% of 0.8
+    bloomMinDeg: 0.04, // same ratio to default as before (was 0.16)
     focusPerTapDeg: 0.3,
     cooldownMs: 650,
     extra: "gold",

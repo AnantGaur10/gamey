@@ -1082,7 +1082,7 @@ function runDuel(
   function crossPx(): number {
     const toAim = camera.position.distanceTo(aimWorld);
     const worldR = Math.tan((machine.bloomDeg * Math.PI) / 180) * toAim;
-    return Math.max(8, (2 * worldR) / worldPerPxAt(aimWorld)); // low floor: the 0.12° min bloom must still read smaller
+    return Math.max(3, (2 * worldR) / worldPerPxAt(aimWorld)); // 3px floor: a 0.03° focus must still read as nearly a dot
   }
 
   // Aim plane through the foe, facing the camera; clamped to a reach box.
