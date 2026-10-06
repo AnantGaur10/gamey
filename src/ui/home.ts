@@ -485,6 +485,39 @@ function runDuel(
     focusPerTapDeg: gun.focusPerTapDeg,
     duelDistM: distM,
   });
+  // The foe's own (unseen) crosshair, same rules as the player's (user
+  // 2026-10-06: "enemy accuracy affected as much as the player"): focus sets
+  // it at DRAW (focusQuality stands in for QTE hits), it regrows until the
+  // first shot, every shot kicks it x1.5, hits flinch it out. Own seed.
+  const foeGun = GUNS.default;
+  const foeAim = new DuelMachine({
+    seed: (machine.seed ^ 0x9e3779b9) >>> 0,
+    bloomStartDeg: foeGun.bloomStartDeg,
+    bloomMinDeg: foeGun.bloomMinDeg,
+    bloomMaxDeg: foeGun.bloomStartDeg + 0.6,
+    focusPerTapDeg: foeGun.focusPerTapDeg,
+    duelDistM: distM,
+  });
+  let foeFired = false;
+  const _fR = new THREE.Vector3();
+  const _fU = new THREE.Vector3();
+  /** Foe shot dir: aim point + hand wobble + a bloom sample, both as angles
+      from the muzzle. `wobble` (rad, gaussian sigma) keeps each AI tier at
+      its pre-bloom hit rate on a first shot (fitted 2026-10-06: 0.03 x
+      accuracyMult, e.g. tier 0 ~51% at 15m); kicks and flinches then cost it
+      accuracy exactly like the player. */
+  function foeAimDir(muzzle: THREE.Vector3, target: THREE.Vector3, wobble: number): THREE.Vector3 {
+    const d = target.clone().sub(muzzle);
+    const dist = d.length();
+    d.normalize();
+    _fR.crossVectors(d, THREE.Object3D.DEFAULT_UP).normalize();
+    _fU.crossVectors(_fR, d).normalize();
+    const sp = foeAim.sampleSpread();
+    return target.clone()
+      .addScaledVector(_fR, (Math.tan(sp.dx) + gauss() * wobble) * dist)
+      .addScaledVector(_fU, (Math.tan(sp.dy) + gauss() * wobble * 0.85) * dist)
+      .sub(muzzle).normalize();
+  }
   // Focus timing QTE: advanced on the fixed clock, judged at the time the
   // player actually saw (last render alpha + wall time since that frame).
   const qte = new TimingQte(machine.seed);
@@ -693,9 +726,32 @@ function runDuel(
         needle: qte.peek(qteExtra()),
         zoneC: qte.zoneC, zoneW: qte.zoneW, perfectW: qte.perfectW, frozen: qte.frozen,
         hits: qte.hits, misses: qte.misses, streak: qte.streak,
-        phase: machine.phase, paused: machine.paused, bloom: machine.bloomDeg,
+        phase: machine.phase, paused: machine.paused, bloom: machine.bloomDeg, foeBloom: foeAim.bloomDeg,
         secsLeft: machine.focusTicksLeft() / 60,
       }),
+      /** Bloom check: n spread samples through playerDirFromClick at the
+          foe's screen spot (no shot fired; consumes the seeded rng). Returns
+          each landing's distance from the aim point / the drawn crosshair
+          radius (1 = on the ring). */
+      spreadCheck: (n = 400) => {
+        const f = foeScreen();
+        const cx = f.body.x, cy = f.body.y;
+        const muzzle = player.gunTip.getWorldPosition(new THREE.Vector3());
+        const rPx = crossPx() / 2;
+        const rect = renderer.domElement.getBoundingClientRect();
+        const out: number[] = [];
+        for (let i = 0; i < n; i++) {
+          const d = playerDirFromClick(cx, cy, muzzle);
+          const hit = new THREE.Vector3();
+          if (!new THREE.Ray(muzzle, d).intersectPlane(aimPlane, hit)) continue;
+          hit.project(camera);
+          const sx = rect.left + ((hit.x + 1) / 2) * rect.width, sy = rect.top + ((1 - hit.y) / 2) * rect.height;
+          out.push(Math.hypot(sx - cx, sy - cy) / rPx);
+        }
+        out.sort((a, b) => a - b);
+        return { n: out.length, rPx: +rPx.toFixed(1), median: +out[out.length >> 1].toFixed(3), max: +out[out.length - 1].toFixed(3),
+          outerShare: +(out.filter((v) => v > 0.6).length / out.length).toFixed(3) };
+      },
       /** Last frame's draw calls / triangles + backing pixel ratio (perf). */
       info: () => ({ ...renderer.info.render, pr: renderer.getPixelRatio() }),
       /** Live gunsmoke/dust/flash sprite counts (impact-FX checks). */
@@ -1180,6 +1236,7 @@ function runDuel(
       return;
     }
     machine.applyFlinch(0, 0.9); // big crosshair bloom on being hit (user-tuned)
+    foeAim.applyFlinch(0, 1.1); // the foe flinches like the player does when hit
     foeFlinchT = 0;
     shakeFoe();
     foeSway?.kick(1);
@@ -1225,6 +1282,7 @@ function runDuel(
     playerHP = Math.max(0, playerHP - dmg);
     paintBars();
     machine.applyFlinch(0, 1.1); // locked §3: flinch both ways, big margin on hit
+    foeAim.applyFlinch(0, 0.9); // landing a hit blooms the shooter too (mirror)
     playerFlinchT = 0;
     if (playerHP > 0) {
       // Wound lottery (same as foe): persistent reactive pose.
@@ -1534,21 +1592,26 @@ function runDuel(
   }
 
   // ---- firing (true projectiles) ----
+  const _camRight = new THREE.Vector3();
+  const _camUp = new THREE.Vector3();
   function playerDirFromClick(cx: number, cy: number, muzzle: THREE.Vector3): THREE.Vector3 {
     const r = renderer.domElement.getBoundingClientRect();
     ndc.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
     raycaster.setFromCamera(ndc, camera);
     const target = new THREE.Vector3();
     if (!raycaster.ray.intersectPlane(aimPlane, target)) target.copy(stage.foe).add(new THREE.Vector3(0, capsuleMid(CAPSULE_FOR_POSE[foeWound]), 0));
-    // bloom spread as an angular offset on the bullet dir (seeded, locked)
+    // Bloom spread (seeded, locked): the sample is an angle from the camera,
+    // the same angle crossPx() draws, so the shot lands inside the visible
+    // circle. Offset across the SCREEN (camera right/up) at the target's
+    // depth. It used to be world x/y scaled by 1/40, so shots hugged the
+    // centre dot whatever the crosshair size (user report 2026-10-06).
     const spread = machine.sampleSpread();
-    const toAim = camera.position.distanceTo(aimWorld);
-    const sx = (spread.dx * toAim) / 40;
-    const sy = (spread.dy * toAim) / 40;
-    const dir = target.clone().sub(muzzle);
-    dir.x += sx;
-    dir.y += sy;
-    return dir.normalize();
+    const camDist = camera.position.distanceTo(target);
+    camera.updateMatrixWorld();
+    target
+      .addScaledVector(_camRight.setFromMatrixColumn(camera.matrixWorld, 0), Math.tan(spread.dx) * camDist)
+      .addScaledVector(_camUp.setFromMatrixColumn(camera.matrixWorld, 1), Math.tan(spread.dy) * camDist);
+    return target.sub(muzzle).normalize();
   }
 
   function attemptFire(cx: number, cy: number): void {
@@ -1566,13 +1629,15 @@ function runDuel(
     kickT = 0;
     machine.phase = "fire";
     ammo -= 1;
-    machine.applyShotKick(); // x1.5, accelerating return to the pre-shot size
     audio.playGunshotSynth(0.85);
     paintBars();
 
     const muzzle = player.gunTip.getWorldPosition(new THREE.Vector3());
     muzzle.y = Math.max(muzzle.y, 0.12); // prone muzzle can sit at the dirt line
+    // Spread from the crosshair the player saw at the click, THEN the kick
+    // (it used to kick first: every shot spread at x1.5 the shown circle).
     const dir = playerDirFromClick(cx, cy, muzzle);
+    machine.applyShotKick(); // x1.5, accelerating return to the pre-shot size
     showSpreadCross(cx, cy);
     gunsmoke.spawn(muzzle);
   // Lethal-if-it-hits at fire time (locked double-KO rule): head always
@@ -1606,19 +1671,17 @@ function runDuel(
       shots++;
       foeAmmo--;
       paintBars();
-      // focusQuality shrinks the foe's bloom like simulated taps
-      const shrink = (gun.bloomStartDeg - gun.bloomMinDeg) * ai.focusQuality;
-      const errScale = ai.accuracyMult * (distM / 11);
       const muzzle = foe.gunTip.getWorldPosition(new THREE.Vector3());
       muzzle.y = Math.max(muzzle.y, 0.12); // prone muzzle can sit at the dirt line
       // Aim at the (possibly wounded/lowered) player capsule mid, preserving
-      // the old +0.12 bias above mid that the 1.35 constant encoded.
+      // the old +0.12 bias above mid that the 1.35 constant encoded. Scatter
+      // = hand wobble (accuracyMult) + the foe's own bloom, same rules as the
+      // player's crosshair (user 2026-10-06).
       const pMid = capsuleMid(CAPSULE_FOR_POSE[playerWound]) + 0.12;
-      const target = stage.player.clone().add(new THREE.Vector3(gauss() * 0.35 * errScale, pMid + gauss() * 0.3 * errScale, 0));
-      // apply un-shrunk remainder as extra error so weak AI actually misses
-      target.x += gauss() * (1 - ai.focusQuality) * 0.5;
-      target.y += gauss() * (1 - ai.focusQuality) * 0.4;
-      const dir = target.sub(muzzle).normalize();
+      const target = stage.player.clone().add(new THREE.Vector3(0, pMid, 0));
+      const dir = foeAimDir(muzzle, target, 0.03 * ai.accuracyMult);
+      foeAim.applyShotKick();
+      foeFired = true;
       gunsmoke.spawn(muzzle, nightBlind); // night: the flash is the only giveaway, so it carries
       audio.playGunshotSynth(0.6, true); // the foe's shot, down the street
       foeKickT = 0; // procedural shooting anim: gun-kick decay in frame loop
@@ -1628,7 +1691,6 @@ function runDuel(
         showBullet(b);
         transport.send({ type: "Fire", tick: machine.tick, pos: [muzzle.x, muzzle.y, muzzle.z], dir: [dir.x, dir.y, dir.z], gunId: "default" });
       }
-      void shrink;
       if (shots < maxShots) {
         foeTimers.push(window.setTimeout(shootOnce, GUNS.default.cooldownMs + 150 + Math.random() * 350));
       }
@@ -1994,6 +2056,8 @@ function runDuel(
       if (drawTick < 0 && (machine.phase === "draw" || machine.phase === "fire")) {
         drawTick = machine.tick;
         drawDust();
+        const fq = AI_ROSTER[clamp(rIdx, 0, AI_ROSTER.length - 1)].focusQuality;
+        foeAim.bloomDeg = foeGun.bloomStartDeg - (foeGun.bloomStartDeg - foeGun.bloomMinDeg) * fq;
       }
       if (machine.phase === "focus" && !machine.paused) qte.advance(STEP);
       // Bloom after DRAW: holding without firing regrows the base (locked
@@ -2003,6 +2067,10 @@ function runDuel(
       // fill on mere hover, breaking the locked tap-only focus feel.
       if (machine.phase === "draw") machine.regrow(STEP);
       if (machine.phase === "draw" || machine.phase === "fire") machine.recoverKick(STEP); // shot kick / hit rubber band
+      if (drawTick >= 0) {
+        if (!foeFired) foeAim.regrow(STEP);
+        foeAim.recoverKick(STEP);
+      }
       stepBullets();
       bulletImpacts();
       // Ammo-out re-check once the last bullet lands. maybeEnd only ran on
