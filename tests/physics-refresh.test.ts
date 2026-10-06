@@ -243,6 +243,14 @@ console.log("== focus QTE multipliers ==");
   m.addQte("perfect");
   m.addQte("perfect");
   ok(near(m.bloomDeg, 0.12), `floored at bloomMin -> ${m.bloomDeg.toFixed(3)}`);
+  // Needle speed follows the crosshair size; prone is final.
+  const q = new TimingQte(42);
+  const t0 = q.traverseSec;
+  q.setSize(0.3);
+  const t1 = q.traverseSec;
+  q.setSize(0);
+  ok(t0 > t1 && t1 > q.traverseSec, `smaller crosshair -> faster needle (${t0.toFixed(3)} > ${t1.toFixed(3)} > ${q.traverseSec.toFixed(3)}s)`);
+  ok(mk().rollWound(3, "prone") === "prone" && mk().rollWound(5, "prone") === "prone", "prone stays prone on later hits");
   m = mk();
   m.addMiss();
   ok(near(m.bloomDeg, 3.12), `click miss x1.3 too: 2.4 -> ${m.bloomDeg.toFixed(3)}`);

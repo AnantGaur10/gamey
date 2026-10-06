@@ -1,16 +1,15 @@
 // Focus timing QTE (user ask 2026-10-05, replaces Space mashing): a needle
 // ping-pongs across a bar; press while it sits in the gold zone. Every press
-// moves the zone; a hit narrows it (and speeds the needle up), a miss widens
-// it, so the skill is chaining as many hits as possible before DRAW. Pure + seeded: advanced
+// moves the zone; a hit narrows it, a miss widens it, and the needle speed
+// follows the crosshair (smaller = faster, setSize), so the skill is chaining as many hits as possible before DRAW. Pure + seeded: advanced
 // only on the shared fixed clock (never per frame), judged at sub-tick time.
 
 import { mulberry32 } from "./DuelMachine";
 
 export type QteResult = "perfect" | "good" | "miss";
 
-const TRAVERSE0_SEC = 0.48; // needle 0 -> 1 at the start (halved again from 0.24, user 2026-10-05)
-const TRAVERSE_MIN_SEC = 0.3;
-const SPEEDUP_PER_HIT = 0.93; // traverse time multiplier per hit
+const TRAVERSE0_SEC = 0.48; // needle 0 -> 1 at the full (start) crosshair
+const TRAVERSE_MIN_SEC = 0.25; // ... and at the smallest crosshair
 const ZONE0 = 0.22; // zone width as a fraction of the bar
 const ZONE_MIN = 0.08;
 const ZONE_MAX = 0.32;
@@ -100,6 +99,15 @@ export class TimingQte {
     return bounce(this.pos, (this.dir * Math.max(0, extraSec)) / this.traverseSec).pos;
   }
 
+  /** Needle speed from the crosshair size (user 2026-10-06: "the smaller
+      it goes the faster the line moves"). k = 1 at the start bloom, 0 at the
+      minimum (caller maps bloom on a log scale: each press multiplies it).
+      Set at press time, so it stays on the fixed clock. */
+  setSize(k: number): void {
+    const c = Math.min(1, Math.max(0, k));
+    this.traverseSec = TRAVERSE_MIN_SEC + (TRAVERSE0_SEC - TRAVERSE_MIN_SEC) * c;
+  }
+
   /** Player pressed. null = ignored (needle still showing the last result). */
   press(extraSec: number): QteResult | null {
     if (this.freezeLeft > 0) return null;
@@ -116,7 +124,6 @@ export class TimingQte {
     } else {
       this.hits += 1;
       this.streak += 1;
-      this.traverseSec = Math.max(TRAVERSE_MIN_SEC, this.traverseSec * SPEEDUP_PER_HIT);
       this.zoneW = Math.max(ZONE_MIN, this.zoneW * ZONE_SHRINK_PER_HIT);
     }
     this.respawn = true; // new position after every press

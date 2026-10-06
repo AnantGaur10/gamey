@@ -165,10 +165,13 @@ export class DuelMachine {
   /** wound lottery (user 2026-10-05: lunge + prone only, bend is never
       rolled but stays forceable): hit 1 always crouch (the lunge); hit 2+
       crouch 60 / prone 40. One rng draw per call either way, so the seeded
-      sequence shared with sampleSpread keeps its shape. Tunable weights. */
-  rollWound(hitsTaken: number): WoundPose {
+      sequence shared with sampleSpread keeps its shape. Tunable weights.
+      Prone is final (user 2026-10-06: "can never move if he got prone"):
+      from prone, later hits keep the duelist down until the round ends. */
+  rollWound(hitsTaken: number, current: WoundPose = "none"): WoundPose {
     if (hitsTaken <= 0) return "none";
     const r = this.rng();
+    if (current === "prone") return "prone";
     if (hitsTaken === 1) return "crouch";
     return r < 0.6 ? "crouch" : "prone";
   }

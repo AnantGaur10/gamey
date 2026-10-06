@@ -1244,7 +1244,7 @@ function runDuel(
     try { (foe as unknown as CowboyGlb).playClip?.("flinch"); } catch { /* no-op */ }
     // Wound lottery: persistent reactive pose (lunge, prone unlocks at hit 2).
     foeWounds += 1;
-    foeWound = machine.rollWound(foeWounds);
+    foeWound = machine.rollWound(foeWounds, foeWound);
     refreshAimPlane();
     void audio.playSFX("hit-body").catch(() => undefined);
     cue.textContent = `HIT −${dmg.toFixed(0)}`;
@@ -1287,7 +1287,7 @@ function runDuel(
     if (playerHP > 0) {
       // Wound lottery (same as foe): persistent reactive pose.
       playerWounds += 1;
-      playerWound = machine.rollWound(playerWounds);
+      playerWound = machine.rollWound(playerWounds, playerWound);
       try { (player as unknown as CowboyGlb).playClip?.("flinch"); } catch { /* no-op */ }
     }
     cross.classList.add("penalty");
@@ -1775,11 +1775,18 @@ function runDuel(
     cross.classList.add("penalty");
     window.setTimeout(() => cross.classList.remove("penalty"), 180);
   }
+  /** Needle speed follows the crosshair: log scale, since every QTE press
+      multiplies the bloom (start -> 1, bloomMin -> 0). */
+  function qteSpeedFromBloom(): void {
+    const k = Math.log(machine.bloomDeg / gun.bloomMinDeg) / Math.log(gun.bloomStartDeg / gun.bloomMinDeg);
+    qte.setSize(k);
+  }
   function qtePress(): void {
     if (machine.phase !== "focus" || machine.paused) return;
     const res = qte.press(qteExtra());
     if (!res) return; // still showing the last result
     machine.addQte(res);
+    qteSpeedFromBloom();
     focusUI.flash(res);
     if (res === "miss") focusPenalty();
   }
@@ -1844,6 +1851,7 @@ function runDuel(
       if (coarse) qtePress();
       else {
         machine.addMiss();
+        qteSpeedFromBloom();
         focusUI.flash("miss");
         focusPenalty();
       }
