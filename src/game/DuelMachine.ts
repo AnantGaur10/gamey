@@ -23,15 +23,15 @@ export interface FocusMiss {
 const FOCUS_TICKS = 180; // 3.0s @ 60Hz
 const TAP_FALLOFF_K = 0.18;
 const HOLD_SHRINK_DEG_PER_SEC = 0.3;
-const MISS_GROW_DEG = 0.25;
 const POST_DRAW_REGROW_DEG_PER_SEC = 0.5;
 const MAX_TAPS_PER_SEC = 12;
-// Timing-QTE focus (2026-10-05): a hit shrinks bloom by focusPerTapDeg x
-// these: PERFECT -0.36° (15% of the 2.4° start), GOOD -0.24° (10%). ~7
-// perfect hits reach the 0.12° bloomMin; a miss costs MISS_GROW_DEG like
-// the old outside-pad tap.
-const QTE_PERFECT_MULT = 1.2;
-const QTE_GOOD_MULT = 0.8;
+// Timing-QTE focus (user 2026-10-06, replaces the fixed-degree steps): the
+// crosshair is MULTIPLIED per press. GOOD halves it, PERFECT cuts it by 75%,
+// any miss (QTE miss or a PC click during Focus) grows it by 30%. Floored at
+// bloomMin, capped at bloomMax: 2 perfects take 2.4° to the 0.15° area.
+const QTE_PERFECT_SCALE = 0.25;
+const QTE_GOOD_SCALE = 0.5;
+const QTE_MISS_SCALE = 1.3;
 const SPREAD_RIM_P = 0.7; // share of shots in the outer ring of the bloom
 const SPREAD_INNER_R = 0.6; // ring starts at this fraction of the radius
 // Shot kick (user 2026-10-05, anti-spam): every player shot multiplies the
@@ -127,9 +127,9 @@ export class DuelMachine {
       this.addMiss();
       return;
     }
-    const mult = res === "perfect" ? QTE_PERFECT_MULT : QTE_GOOD_MULT;
+    const k = res === "perfect" ? QTE_PERFECT_SCALE : QTE_GOOD_SCALE;
     this.tapCount += 1;
-    this.bloomDeg = Math.max(this.bloomMinDeg, this.bloomDeg - this.focusPerTapDeg * mult);
+    this.bloomDeg = Math.max(this.bloomMinDeg, this.bloomDeg * k);
   }
 
   /** Holster left before DRAW: the whole Focus restarts (full 3.0s countdown,
@@ -159,7 +159,7 @@ export class DuelMachine {
   addMiss(): void {
     if (this.phase !== "focus") return;
     this.misses.push({ tick: this.tick });
-    this.bloomDeg = Math.min(this.bloomMaxDeg, this.bloomDeg + MISS_GROW_DEG);
+    this.bloomDeg = Math.min(this.bloomMaxDeg, this.bloomDeg * QTE_MISS_SCALE);
   }
 
   /** wound lottery (user 2026-10-05: lunge + prone only, bend is never

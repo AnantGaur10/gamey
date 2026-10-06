@@ -224,6 +224,34 @@ console.log("== crosshair shot kick + hit rubber band ==");
   }
 }
 
+console.log("== focus QTE multipliers ==");
+{
+  // User 2026-10-06: good x0.5, perfect x0.25, any miss x1.3 (bloomMin..bloomMax).
+  const mk = () => {
+    const m = new DuelMachine({ seed: 7, bloomStartDeg: 2.4, bloomMinDeg: 0.12, focusPerTapDeg: 0.3, duelDistM: 12 });
+    m.startFocus();
+    return m;
+  };
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+  let m = mk();
+  m.addQte("good");
+  ok(near(m.bloomDeg, 1.2), `good halves 2.4 -> ${m.bloomDeg.toFixed(3)}`);
+  m.addQte("perfect");
+  ok(near(m.bloomDeg, 0.3), `perfect quarters 1.2 -> ${m.bloomDeg.toFixed(3)}`);
+  m.addQte("miss");
+  ok(near(m.bloomDeg, 0.39), `miss x1.3 0.3 -> ${m.bloomDeg.toFixed(3)}`);
+  m.addQte("perfect");
+  m.addQte("perfect");
+  ok(near(m.bloomDeg, 0.12), `floored at bloomMin -> ${m.bloomDeg.toFixed(3)}`);
+  m = mk();
+  m.addMiss();
+  ok(near(m.bloomDeg, 3.12), `click miss x1.3 too: 2.4 -> ${m.bloomDeg.toFixed(3)}`);
+  m = new DuelMachine({ seed: 7, bloomStartDeg: 2.4, bloomMinDeg: 0.12, bloomMaxDeg: 3.0, focusPerTapDeg: 0.3, duelDistM: 12 });
+  m.startFocus();
+  m.addMiss();
+  ok(near(m.bloomDeg, 3.0), `capped at bloomMax (game max 3.0) -> ${m.bloomDeg.toFixed(3)}`);
+}
+
 console.log("== damage falloff (6-25m) ==");
 {
   const want: Array<[number, number]> = [[6, 1], [9, 1], [11, 0.92], [14, 0.7], [15, 0.7 - 0.22 / 3], [17, 0.55], [25, 0.55]];

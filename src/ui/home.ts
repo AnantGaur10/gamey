@@ -2045,8 +2045,11 @@ function runDuel(
   function frame(): void {
     if (!alive) return;
     raf = requestAnimationFrame(frame);
-    const dt = Math.min(clock.getDelta(), 0.1);
-    noteFrame(dt);
+    const rawDt = clock.getDelta();
+    const dt = Math.min(rawDt, 0.1);
+    // Watchdog on WALL time: the clamped dt hid 300ms frames as 100ms and
+    // took ~5s to shed the load on software GL.
+    noteFrame(rawDt);
     playerSway?.sense(dt);
     foeSway?.sense(dt);
     // ONE fixed clock for all physics (spec: consistent across 60/144/165Hz,
