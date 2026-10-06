@@ -13,9 +13,11 @@ Steps: mute NLA -> authored STANDING pose (frame 1 of fall_back_*) -> rebuild th
 knee/shin chain in world space -> reparent loose parts (boots, spurs, chaps,
 coat tails, left forearm/fingers) preserving world transforms -> bevel segments
 1 (~4.4k tris/cowboy, locked budget 3-5k) -> drop the inert wound clips and
-re-key the visible flinch/victory/defeat arm clips -> export with
-export_apply=True.
-Verify afterwards: same node names + node TRS, 28 animations, Pelvis y 0.95,
+re-key the visible flinch/victory/defeat arm clips -> palette x AO into COLOR_0
+and merge every mesh into its KEEP node (15 meshes, 1 material M_Cowboy) ->
+export (COLOR_0, no normals) + glb_util.slim_glb.
+Verify afterwards: every KEEP node's world TRS unchanged (H_Top is now H_Hat),
+same 28 clip names, tris 4348/4392, world vertex set unchanged, Pelvis y 0.95,
 Knee/Waist 0.
 """
 import os
@@ -243,11 +245,152 @@ for pre in ("H_", "O_"):
     for f in (1, 13, 25, 37, 48): fz.keyframe_points.insert(f, az)  # same frames as x: no exporter re-bake
     fz.update()
 
+# --- palette x AO in COLOR_0 + merge (user 2026-10-06) ------------------------
+# 73 meshes x 11 PBR materials per cowboy were ~146 draw calls for the pair.
+# Every mesh joins its nearest KEEP node (the nodes the game reads by name, plus
+# the hat and coat tails, which sway on their own), the material colour moves
+# into a "Col" corner attribute multiplied by a Cycles AO bake (same look as
+# the street), and one vertex-colour material is left: ~15 draws per cowboy.
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import glb_util
+KEEP = ("Pelvis", "Torso", "Head", "Waist", "Sleeve_L", "Cuff_L", "Leg_L", "Leg_R", "Knee_L", "Knee_R",
+        "Shin_L", "Shin_R", "armR", "elbowR", "Gun", "GunHolster", "gunTip", "Top", "CoatTail_L", "CoatTail_R")
+HAT = ("Brim", "Band", "Dent")            # join the crown (Top), renamed {P}_Hat
+# Empty KEEP nodes take their geometry on this direct child (its name keeps
+# the ragdoll's /fore|hand/ forearm filter working for elbowR).
+INTO = {"armR": "Sleeve_R", "elbowR": "Fore_R", "Gun": "Frame"}
+AO_K = 0.6                                 # corner colour *= 1 - AO_K * (1 - ao)
+
+def base_colour(mat):
+    """Lambert stand-in for the PBR colour. Metals have no diffuse: with no
+    environment map the old PBR gun/brass read near-black, so metallic
+    colours are darkened to keep that look (with a hint of their hue)."""
+    if mat and mat.use_nodes:
+        for n in mat.node_tree.nodes:
+            if n.type == "BSDF_PRINCIPLED":
+                c = n.inputs["Base Color"].default_value
+                k = 1 - 0.7 * n.inputs["Metallic"].default_value
+                return (c[0] * k, c[1] * k, c[2] * k, 1.0)
+    return tuple(mat.diffuse_color) if mat else (0.8, 0.8, 0.8, 1.0)
+
+def apply_and_paint(o):
+    dg = bpy.context.evaluated_depsgraph_get()
+    me = bpy.data.meshes.new_from_object(o.evaluated_get(dg))
+    o.modifiers.clear()
+    o.data = me
+    cols = [base_colour(s.material) for s in o.material_slots] or [(0.8, 0.8, 0.8, 1.0)]
+    ca = me.color_attributes.new("Col", "FLOAT_COLOR", "CORNER")
+    for p in me.polygons:
+        c = cols[min(p.material_index, len(cols) - 1)]
+        for li in p.loop_indices:
+            ca.data[li].color = (c[0], c[1], c[2], 1.0)
+    me.color_attributes.active_color = ca
+
+def join(target, srcs):
+    if not srcs: return
+    with bpy.context.temp_override(active_object=target, selected_editable_objects=[target, *srcs]):
+        bpy.ops.object.join()
+
+def bake_ao(objs, hidden):
+    sc = bpy.context.scene
+    sc.render.engine = "CYCLES"
+    sc.cycles.device = "CPU"
+    sc.cycles.samples = 64
+    sc.render.bake.target = "VERTEX_COLORS"
+    sc.render.bake.margin = 0
+    if not sc.world: sc.world = bpy.data.worlds.new("World")
+    sc.world.light_settings.distance = 0.3
+    for o in hidden: o.hide_render = True
+    bpy.ops.object.select_all(action="DESELECT")
+    for o in objs:
+        me = o.data
+        me.color_attributes.new("AO", "FLOAT_COLOR", "CORNER")
+        me.color_attributes.active_color = me.color_attributes["AO"]
+        o.select_set(True)
+    bpy.context.view_layer.objects.active = objs[0]
+    bpy.ops.object.bake(type="AO")
+    for o in objs:
+        me = o.data
+        col, ao = me.color_attributes["Col"].data, me.color_attributes["AO"].data
+        for i in range(len(col)):
+            m = 1 - AO_K * (1 - min(1.0, max(0.0, ao[i].color[0])))
+            c = col[i].color
+            col[i].color = (c[0] * m, c[1] * m, c[2] * m, 1.0)
+        me.color_attributes.remove(me.color_attributes["AO"])
+        me.color_attributes.active_color = me.color_attributes["Col"]
+    for o in hidden: o.hide_render = False
+
+mat = glb_util.material("M_Cowboy")
+# Contact AO under the boots: a ground plane at the feet (z=0 in the .blend).
+gme = bpy.data.meshes.new("BakeGround")
+gme.from_pydata([(-30, -30, 0), (30, -30, 0), (30, 30, 0), (-30, 30, 0)], [], [(0, 1, 2, 3)])
+ground = bpy.data.objects.new("BakeGround", gme)
+bpy.context.scene.collection.objects.link(ground)
+for pre, coll in (("H_", "Hero"), ("O_", "Outlaw")):
+    col = bpy.data.collections[coll]
+    keep = {pre + k for k in KEEP}
+    meshes = [o for o in col.objects if o.type == "MESH"]
+    for o in meshes:
+        if o.data.users > 1: o.data = o.data.copy()
+        apply_and_paint(o)
+    def target_of(o):
+        n = o.name[len(pre):]
+        if n in HAT: return O(pre + "Top")
+        p = o.parent
+        while p and p.name not in keep: p = p.parent
+        if p is None: raise SystemExit(f"{o.name}: no KEEP ancestor")
+        return p
+    groups = {}
+    for o in meshes:
+        if o.name in keep: continue
+        groups.setdefault(target_of(o).name, []).append(o)
+    # A non-KEEP node with a KEEP descendant would take that node with it.
+    for o in col.objects:
+        if o.name in keep: continue
+        stack = list(o.children)
+        while stack:
+            c = stack.pop()
+            if c.name in keep: raise SystemExit(f"KEEP {c.name} sits under non-KEEP {o.name}")
+            stack.extend(c.children)
+    for tname, srcs in sorted(groups.items()):
+        t = O(tname)
+        if t.type != "MESH":
+            t = O(pre + INTO[tname[len(pre):]])
+            srcs = [s for s in srcs if s is not t]
+        join(t, sorted(srcs, key=lambda s: s.name))
+    O(pre + "Top").name = pre + "Hat"
+    upd()
+    merged = [o for o in col.objects if o.type == "MESH"]
+    for o in merged:
+        o.data.materials.clear()
+        o.data.materials.append(mat)
+        for p in o.data.polygons: p.material_index = 0
+    # Gun arm hidden while the body bakes: it swings up at DRAW, and its AO
+    # left on the torso would float there. Then the arm bakes in context.
+    arm = set()
+    stack = [O(pre + "armR")]
+    while stack:
+        a = stack.pop()
+        if a.type == "MESH": arm.add(a)
+        stack.extend(a.children)
+    others = [o for c in ("Hero", "Outlaw") for o in bpy.data.collections[c].objects
+              if o.type == "MESH" and c != coll]
+    body = [o for o in merged if o not in arm]
+    bake_ao(body, list(arm) + others)
+    bake_ao(sorted(arm, key=lambda o: o.name), others)
+    print(pre, "merged meshes:", sorted(o.name for o in merged), "tris:",
+          sum(sum(len(p.vertices) - 2 for p in o.data.polygons) for o in merged))
+bpy.data.objects.remove(ground, do_unlink=True)
+
 # --- export (NLA stays muted; this process never saves the .blend) ----------
 OUT = os.environ.get("GLB_OUT") or os.path.normpath(
     os.path.join(os.path.dirname(bpy.data.filepath), "..", "public", "models"))
 for coll, name in (("Hero", "cowboy_hero"), ("Outlaw", "cowboy_outlaw")):
     bpy.context.view_layer.active_layer_collection = bpy.context.view_layer.layer_collection.children[coll]
-    bpy.ops.export_scene.gltf(filepath=os.path.join(OUT, name + ".glb"), export_format="GLB",
-                              use_active_collection=True, export_apply=True, export_animations=True)
+    path = os.path.join(OUT, name + ".glb")
+    bpy.ops.export_scene.gltf(filepath=path, export_format="GLB", use_active_collection=True,
+                              export_apply=True, export_animations=True, export_vertex_color="ACTIVE",
+                              export_normals=False, export_texcoords=False)
+    glb_util.slim_glb(path)
 print("EXPORTED to", OUT)

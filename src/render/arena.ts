@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { createPost, type Grade } from "./post";
 
 // Flat-styled 3D: orthographic camera (exact flat-vector feel),
 // unlit-leaning lights, CSS gradient sky behind a transparent canvas,
@@ -13,6 +14,13 @@ export interface TimeOfDay {
   dirColor: number;
   fogColor: number;
   fogDensity: number;
+  /** Screen-space sky, top -> bottom: [position 0..1, colour] (in-scene since
+      the canvas went opaque for the post chain; same stops as the old CSS). */
+  sky: Array<[number, number]>;
+  /** Post grade (render/post.ts): tone map exposure, tint, saturation. */
+  grade: Grade;
+  /** Cowboy rim light (addRimLight). */
+  rim: { color: number; strength: number };
 }
 
 export const NOON: TimeOfDay = {
@@ -23,6 +31,9 @@ export const NOON: TimeOfDay = {
   dirColor: 0xfff4e0,
   fogColor: 0xe8b07e,
   fogDensity: 0.008,
+  sky: [[0, 0x2f6cb3], [0.45, 0x7fa8d0], [0.78, 0xd9b380], [1, 0xc49a68]],
+  grade: { exposure: 1.0, saturation: 1.1, contrast: 1.05, lift: [0, 0, 0], gain: [1.02, 1, 0.96] },
+  rim: { color: 0xfff0d0, strength: 0.3 },
 };
 
 // R1 noon → R2 evening → R3+ night (locked 2026-09-24 §11). Darker = harder
@@ -38,6 +49,9 @@ export const EVENING: TimeOfDay = {
   dirColor: 0xff9a4a,
   fogColor: 0xc97a4a,
   fogDensity: 0.045, // dusk haze: the foe half-fades, the storefronts mostly
+  sky: [[0, 0x3a2a5e], [0.48, 0xa85a4a], [0.75, 0xe8875a], [1, 0x7a4a3a]],
+  grade: { exposure: 0.95, saturation: 1.1, contrast: 1.06, lift: [0.01, 0, 0.015], gain: [1.06, 0.96, 0.88] },
+  rim: { color: 0xffa060, strength: 0.3 },
 };
 
 export const NIGHT: TimeOfDay = {
@@ -48,6 +62,10 @@ export const NIGHT: TimeOfDay = {
   dirColor: 0x8aa8ff,
   fogColor: 0x141024,
   fogDensity: 0.12, // the foe sinks into the night fog; the flash cuts through
+  sky: [[0, 0x04060f], [0.5, 0x141230], [0.78, 0x3a1a3a], [1, 0x1c0f0c]],
+  // No lift at night: it would grey the fog and hand back the foe.
+  grade: { exposure: 1.4, saturation: 0.85, contrast: 1.04, lift: [0, 0, 0], gain: [0.9, 0.95, 1.1] },
+  rim: { color: 0x8aa8ff, strength: 0.1 },
 };
 
 // Hell sudden death (render/hell.ts builds the set): lava light comes from
@@ -60,12 +78,19 @@ export const HELL: TimeOfDay = {
   dirColor: 0xff7a40,
   fogColor: 0x1c0605,
   fogDensity: 0.014,
+  sky: [[0, 0x0d0202], [0.6, 0x3a0a06], [1, 0xff3a12]],
+  grade: { exposure: 1.1, saturation: 1.15, contrast: 1.08, lift: [0.01, 0, 0], gain: [1.1, 0.92, 0.85] },
+  rim: { color: 0xff5020, strength: 0.2 },
 };
 
 // HiDPI: render at device pixels (capped) so phones/retina aren't upscaled
 // blurry. The cap only ever drops (frame-time watchdog in noteFrame) and is
 // module-level so a slow device stays at 1x for every later duel.
 let pixelRatioCap = 2;
+// Second watchdog stage: still slow at 1x -> drop the post pass (FXAA +
+// grade) for the session. FXAA alone cost ~80ms per 1080p frame on software
+// GL; on real GPUs it is well under 1ms and stays on.
+let postOff = false;
 
 // Right-shoulder perspective camera (see createArena). Offsets in metres
 // from the player's feet: back along the duel line, out to the side, up.
@@ -218,6 +243,32 @@ function dirtDetailTexture(): THREE.CanvasTexture {
   return tex;
 }
 
+// Cowboy rim light (user 2026-10-06): a fresnel edge glow that lifts both
+// duelists off the busy street on small screens. Added BEFORE fog, so night
+// fog still swallows the foe (night difficulty is fog, see NIGHT). One set of
+// uniforms shared by every cowboy material; setTimeOfDay retints it.
+const rimUniforms = {
+  uRimColor: { value: new THREE.Color(0xfff0d0) },
+  uRimStrength: { value: 0 },
+};
+
+/** Fresnel rim on a Lambert material (GLB + procedural cowboys). */
+export function addRimLight(mat: THREE.Material): void {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uRimColor = rimUniforms.uRimColor;
+    sh.uniforms.uRimStrength = rimUniforms.uRimStrength;
+    sh.fragmentShader = sh.fragmentShader
+      .replace("#include <common>", "#include <common>\nuniform vec3 uRimColor;\nuniform float uRimStrength;")
+      .replace(
+        "#include <opaque_fragment>",
+        `float rimF = 1.0 - saturate(dot(normal, normalize(vViewPosition)));
+        outgoingLight += uRimColor * (uRimStrength * rimF * rimF * rimF);
+        #include <opaque_fragment>`,
+      );
+  };
+  mat.needsUpdate = true;
+}
+
 /** Multiply the dirt detail onto a Lambert material's fragments that sit at
  *  floor height (world y < maxY). `axis` = the duel direction (sets the
  *  stretched repeat). Same texture + projection everywhere = no seams. */
@@ -261,9 +312,54 @@ export function timeOfDayForRound(i: number): TimeOfDay {
 
 /** Matching CSS sky gradient for the page background (transparent canvas). */
 export function cssSkyForRound(i: number): string {
-  if (i <= 0) return "linear-gradient(#2f6cb3 0%, #7fa8d0 45%, #d9b380 78%, #c49a68 100%)";
-  if (i === 1) return "linear-gradient(#3a2a5e 0%, #a85a4a 48%, #e8875a 75%, #7a4a3a 100%)";
-  return "linear-gradient(#04060f 0%, #141230 50%, #3a1a3a 78%, #1c0f0c 100%)";
+  const hex = (c: number) => `#${c.toString(16).padStart(6, "0")}`;
+  return `linear-gradient(${timeOfDayForRound(i).sky.map(([p, c]) => `${hex(c)} ${Math.round(p * 100)}%`).join(", ")})`;
+}
+
+// Screen-space sky behind everything (was the CSS page gradient behind a
+// transparent canvas; the post chain needs an opaque frame to grade). Sits
+// on the far plane and draws LAST among opaques with a depth test, so only
+// uncovered pixels shade (a first-drawn fullscreen quad cost a whole
+// screen of fill on software GL). Fog-free; hell's dome covers it.
+const SKY_STOPS = 4;
+function createSky(): { mesh: THREE.Mesh; set(stops: Array<[number, number]>): void } {
+  const pos = new Float32Array(SKY_STOPS);
+  const cols = Array.from({ length: SKY_STOPS }, () => new THREE.Color());
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uPos: { value: pos }, uCol: { value: cols } },
+    vertexShader: `varying float vY;
+      void main() { vY = position.y * 0.5 + 0.5; gl_Position = vec4(position.xy, 1.0, 1.0); }`,
+    fragmentShader: `uniform float uPos[${SKY_STOPS}];
+      uniform vec3 uCol[${SKY_STOPS}];
+      varying float vY;
+      void main() {
+        float t = 1.0 - vY;
+        vec3 c = uCol[0];
+        for (int i = 1; i < ${SKY_STOPS}; i++) {
+          c = mix(c, uCol[i], clamp((t - uPos[i - 1]) / max(1e-4, uPos[i] - uPos[i - 1]), 0.0, 1.0));
+        }
+        gl_FragColor = vec4(c, 1.0);
+        // No-ops into the post target; tone map + sRGB on the direct path.
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+    depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 1e6;
+  mesh.name = "Sky";
+  return {
+    mesh,
+    set(stops) {
+      for (let i = 0; i < SKY_STOPS; i++) {
+        const [p, c] = stops[Math.min(i, stops.length - 1)];
+        pos[i] = i < stops.length ? p : 1 + i;
+        // CSS colours are sRGB; the scene target is linear.
+        cols[i].setHex(c, THREE.SRGBColorSpace);
+      }
+    },
+  };
 }
 
 // Diagonal duel line: player bottom-left foreground, foe top-right
@@ -290,6 +386,10 @@ export function createArena(distM: number): {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   renderer: THREE.WebGLRenderer;
+  /** Draw one frame: scene -> grade/tone map -> FXAA (or direct if the post
+      chain failed). */
+  render(): void;
+  disposePost(): void;
   /** World metres per CSS px at a world point (perspective: depth-dependent). */
   worldPerPxAt(p: THREE.Vector3): number;
   setTimeOfDay(t: TimeOfDay): void;
@@ -326,8 +426,19 @@ export function createArena(distM: number): {
   camera.lookAt(camLook);
   const camBase = camera.position.clone();
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setClearColor(0x000000, 0); // CSS sunset gradient shows through
+  // No MSAA (user 2026-10-06: too expensive on low-end): FXAA in the post
+  // chain instead. Opaque: the sky is in the scene so the grade covers it.
+  const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
+  renderer.setClearColor(0x000000, 1);
+  // One frame = scene + 2 post passes; reset per frame so info() sums them.
+  renderer.info.autoReset = false;
+  let post = postOff ? null : createPost(renderer);
+  // Direct path (post failed or the watchdog dropped it): built-in materials
+  // tone map themselves; no FXAA, no tint/saturation grade.
+  const goDirect = () => { renderer.toneMapping = THREE.ACESFilmicToneMapping; };
+  if (!post) goDirect();
+  const sky = createSky();
+  scene.add(sky.mesh);
 
   const hemi = new THREE.HemisphereLight(0xfff2dd, 0x8a6f4d, NOON.hemiIntensity);
   const dir = new THREE.DirectionalLight(NOON.dirColor, NOON.dirIntensity);
@@ -686,6 +797,11 @@ export function createArena(distM: number): {
   }
 
   function setTimeOfDay(t: TimeOfDay): void {
+    sky.set(t.sky);
+    post?.setGrade(t.grade);
+    renderer.toneMappingExposure = t.grade.exposure;
+    rimUniforms.uRimColor.value.setHex(t.rim.color);
+    rimUniforms.uRimStrength.value = t.rim.strength;
     (scene.fog as THREE.FogExp2).color.setHex(t.fogColor);
     (scene.fog as THREE.FogExp2).density = t.fogDensity;
     hemi.intensity = t.hemiIntensity;
@@ -705,6 +821,8 @@ export function createArena(distM: number): {
     // store's pixel ratio never changes gameplay.
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, coarse ? 1.5 : 2, pixelRatioCap));
     renderer.setSize(w, h, false);
+    const db = renderer.getDrawingBufferSize(new THREE.Vector2());
+    post?.setSize(db.x, db.y);
     cssH = Math.max(1, h);
     const aspect = w / cssH;
     // All QA sizes are ~16:9. Narrower than that: keep the 16:9 horizontal
@@ -726,19 +844,27 @@ export function createArena(distM: number): {
 
   // Watchdog: after a short warm-up, a 1s window averaging > 22ms/frame
   // (its single longest frame left out, so one shader-compile or GLB-swap
-  // stall can't trip it) while above 1x drops to 1x for the session. Short
-  // so a slow device leaves the heavy ratio before the Focus QTE matters.
+  // stall can't trip it) while above 1x drops to 1x for the session; still
+  // slow at 1x drops the post pass (postOff). Short so a slow device sheds
+  // the load before the Focus QTE matters.
   let warm = 0, winT = 0, winN = 0, winMax = 0;
   function noteFrame(dt: number): void {
-    if (renderer.getPixelRatio() <= 1) return;
+    if (renderer.getPixelRatio() <= 1 && !post) return;
     if (warm < 0.75) { warm += dt; return; }
     winT += dt;
     winN += 1;
     winMax = Math.max(winMax, dt);
     if (winT < 1) return;
     if (winN > 1 && (winT - winMax) / (winN - 1) > 0.022) {
-      pixelRatioCap = 1;
-      fitCamera();
+      if (renderer.getPixelRatio() > 1) {
+        pixelRatioCap = 1;
+        fitCamera();
+      } else if (post) {
+        postOff = true;
+        post.dispose();
+        post = null;
+        goDirect();
+      }
     }
     winT = 0;
     winN = 0;
@@ -763,10 +889,18 @@ export function createArena(distM: number): {
     camera.lookAt(_look);
   }
 
+  function render(): void {
+    renderer.info.reset();
+    if (post) post.render(scene, camera);
+    else renderer.render(scene, camera);
+  }
+
   return {
     scene,
     camera,
     renderer,
+    render,
+    disposePost: () => post?.dispose(),
     worldPerPxAt,
     setTimeOfDay,
     fitCamera,

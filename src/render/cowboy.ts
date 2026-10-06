@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { addRimLight } from "./arena";
 
 // Procedural frontier cowboy: joint hierarchy with shoulder/elbow pivots +
 // gun socket so Blender GLBs can drop in later under the same joint names
@@ -134,7 +135,11 @@ export function createCowboy(opts: {
   moustache?: boolean; // outlaw facial hair (GLB parity for the fallback)
 }): Cowboy {
   const { coat, hat, skin, facing, accent = 0xa33b2e, moustache = false } = opts;
-  const mat = (c: number) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
+  const mat = (c: number) => {
+    const m = new THREE.MeshLambertMaterial({ color: c, flatShading: true });
+    addRimLight(m);
+    return m;
+  };
   const dark = mat(0x2e2620);
   const group = new THREE.Group();
   // YXZ: yaw first, then local-X pitch. Wound poses pitch about the LOCAL X

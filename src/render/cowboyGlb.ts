@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { makeGunHolster, type Cowboy } from "./cowboy";
+import { addRimLight } from "./arena";
+import { pivotMesh, type SwayNode } from "./sway";
 
 // Loads a Blender-exported cowboy GLB and adapts it to the Cowboy seam so
 // game logic never knows the difference. Returns null on ANY failure —
@@ -26,6 +28,22 @@ export interface CowboyGlb extends Cowboy {
   playFrozen(name: string): void;
   /** Advance mixer; call every frame (no-op without clips). */
   update(dt: number): void;
+  /** Hat + coat-tail pivots for render/sway.ts (empty on old GLBs). */
+  sway: SwayNode[];
+}
+
+let sharedMat: THREE.MeshLambertMaterial | null = null;
+function cowboyMaterial(): THREE.MeshLambertMaterial {
+  if (!sharedMat) {
+    sharedMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+    addRimLight(sharedMat);
+  }
+  return sharedMat;
+}
+function rimLambert(color: THREE.Color | undefined): THREE.MeshLambertMaterial {
+  const m = new THREE.MeshLambertMaterial({ color: color ?? 0xcccccc, flatShading: true });
+  addRimLight(m);
+  return m;
 }
 
 export async function loadCowboyGlb(
@@ -50,6 +68,17 @@ export async function loadCowboyGlb(
       }
     });
     for (const s of strays) s.removeFromParent();
+    // Palette x baked AO ride in COLOR_0 (build_glbs.py), so the loader's PBR
+    // material is swapped for one flat Lambert (cheaper per pixel on low-end
+    // GPUs, same shading as the street) with the rim light. Old GLBs without
+    // COLOR_0 keep their material colour.
+    inner.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      m.material = m.geometry.getAttribute("color")
+        ? cowboyMaterial()
+        : rimLambert((m.material as THREE.MeshStandardMaterial).color);
+    });
     // Self-center: modeling space is NOT origin-centered (Outlaw stood ~3.5m
     // off-origin beside Hero in the .blend), but game logic (hit capsule,
     // marker rings, ragdoll bodies, gun-side math) all live at the group
@@ -75,6 +104,20 @@ export async function loadCowboyGlb(
     // YXZ like the procedural rig (see cowboy.ts): wound pitches lean local.
     group.rotation.order = "YXZ";
     group.add(anim);
+    // Sway pivots (build_glbs.py keeps the hat and coat tails as their own
+    // meshes): the hat rocks on its brim, the tails hang from their tops.
+    const sway: SwayNode[] = [];
+    inner.updateMatrixWorld(true);
+    for (const [n, kind] of [["Hat", "hat"], ["CoatTail_L", "tail"], ["CoatTail_R", "tail"]] as const) {
+      const m = inner.getObjectByName(`${prefix}_${n}`);
+      if (!m) continue;
+      const b = new THREE.Box3().setFromObject(m);
+      if (b.isEmpty()) continue;
+      const at = b.getCenter(new THREE.Vector3());
+      at.y = kind === "hat" ? b.min.y : b.max.y;
+      const pivot = pivotMesh(m, at, `${prefix}_${n}Pivot`);
+      if (pivot) sway.push({ pivot, kind });
+    }
     const armR = inner.getObjectByName(`${prefix}_armR`) as THREE.Group | undefined;
     const elbowR = inner.getObjectByName(`${prefix}_elbowR`) as THREE.Group | undefined;
     const gunTip = inner.getObjectByName(`${prefix}_gunTip`);
@@ -202,7 +245,7 @@ export async function loadCowboyGlb(
     // hand onto the holstered grip, so holster() only moves the gun.
     const gun = byName("Gun");
     const holsterCtl = makeGunHolster(gun, byName("GunHolster"), elbowR);
-    return { group, armR, elbowR, gunTip, parts, joints, setGunsDown, setRaised, setFall, mixer, hasClip, playClip, stopClips, playFrozen, update,
+    return { group, armR, elbowR, gunTip, parts, joints, setGunsDown, setRaised, setFall, mixer, hasClip, playClip, stopClips, playFrozen, update, sway,
       gun, holster: holsterCtl.holster, drawStep: holsterCtl.drawStep, gunState: holsterCtl.gunState };
   } catch (err) {
     // Silent in prod (procedural fallback covers AdBlock/offline/file://);

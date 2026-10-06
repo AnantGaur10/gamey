@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { createArena, stagePositions, faceToward, timeOfDayForRound, cssSkyForRound, createShadowDecal, HELL, type ShadowDecal } from "../render/arena";
+import { createSway, type Sway } from "../render/sway";
 import { createCowboy, type Cowboy } from "../render/cowboy";
 import { loadCowboyGlb, swapCowboy, type CowboyGlb } from "../render/cowboyGlb";
 import { loadStreetGlb, type StreetSet } from "../render/streetGlb";
@@ -247,7 +248,7 @@ function runDuel(
   // Wind picks up as the day goes (noon breeze -> night gusts; hell roars).
   audio.startWind(hellRound ? 0.8 : [0.45, 0.65, 0.85][Math.min(rIdx, 2)], hellRound);
 
-  const { scene, camera, renderer, worldPerPxAt, fitCamera, setTimeOfDay, noteFrame, setProneFrame } = createArena(distM);
+  const { scene, camera, renderer, render, disposePost, worldPerPxAt, fitCamera, setTimeOfDay, noteFrame, setProneFrame } = createArena(distM);
   // Time-of-day driver: R1 noon → R2 evening → R3+ night. Hell overrides.
   setTimeOfDay(hellRound ? HELL : timeOfDayForRound(rIdx));
   document.body.style.background = hellRound
@@ -371,10 +372,14 @@ function runDuel(
   try { bindAccessories(foe.group, foe.parts); } catch { /* noop */ }
   let playerDoll: Ragdoll | null = createRagdoll(scene, player.parts, gun.id);
   let foeDoll: Ragdoll | null = createRagdoll(scene, foe.parts, gun.id);
+  // Hat + coat-tail secondary motion (GLB rigs only; procedural has no pivots).
+  let playerSway: Sway | null = null;
+  let foeSway: Sway | null = null;
   const base = import.meta.env.BASE_URL;
   void loadCowboyGlb(`${base}models/cowboy_hero.glb`, "H").then((m) => {
     if (m && alive) {
       player = swapCowboy(scene, player, m);
+      playerSway = createSway(m.sway);
       // Late swap after DRAW: procedural owns the arms, silence idle. Before
       // DRAW the fresh rig's gun goes into its holster (idle = hand on grip).
       if (tracking) (player as unknown as CowboyGlb).stopClips?.();
@@ -391,6 +396,7 @@ function runDuel(
   void loadCowboyGlb(`${base}models/cowboy_outlaw.glb`, "O").then((m) => {
     if (m && alive) {
       foe = swapCowboy(scene, foe, m);
+      foeSway = createSway(m.sway);
       if (tracking) (foe as unknown as CowboyGlb).stopClips?.();
       else foe.holster?.();
       if (foeHP <= 0) {
@@ -694,6 +700,9 @@ function runDuel(
       info: () => ({ ...renderer.info.render, pr: renderer.getPixelRatio() }),
       /** Live gunsmoke/dust/flash sprite counts (impact-FX checks). */
       fx: () => gunsmoke.live(),
+      /** Hat / coat-tail sway pivot angles (x, z) per duelist (sway checks). */
+      sway: () => Object.fromEntries((["player", "foe"] as const).map((k) => [k,
+        ((k === "player" ? player : foe) as unknown as CowboyGlb).sway?.map((n) => [n.pivot.name, +n.pivot.rotation.x.toFixed(3), +n.pivot.rotation.z.toFixed(3)]) ?? []])),
       /** Look-dev: force round i's time of day + street glow; hell=true
           also drops the hell set in (street captures, not gameplay). */
       tod: (i: number, hell = false) => {
@@ -1173,6 +1182,8 @@ function runDuel(
     machine.applyFlinch(0, 0.9); // big crosshair bloom on being hit (user-tuned)
     foeFlinchT = 0;
     shakeFoe();
+    foeSway?.kick(1);
+    shakeCam(0.012); // landing a hit: a tiny thump
     try { (foe as unknown as CowboyGlb).playClip?.("flinch"); } catch { /* no-op */ }
     // Wound lottery: persistent reactive pose (lunge, prone unlocks at hit 2).
     foeWounds += 1;
@@ -1185,6 +1196,8 @@ function runDuel(
 
   function hitPlayer(head: boolean, dmg: number, point?: THREE.Vector3, dir?: THREE.Vector3): void {
     if (roundOver) return;
+    shakeCam(head ? 0.09 : 0.055);
+    playerSway?.kick(1);
     if (head) {
       playerHP = 0;
       playerDeadAt = performance.now();
@@ -1845,6 +1858,7 @@ function runDuel(
     playerShadow.dispose();
     foeShadow.dispose();
     cancelAnimationFrame(raf);
+    disposePost();
     renderer.dispose();
   }
 
@@ -1932,6 +1946,24 @@ function runDuel(
   const aimDir = new THREE.Vector3();
   let swayT = 0;
   let punchT = -1;
+  let shakeT = 0;
+  let shakeAmp = 0;
+  const camSaved = { p: new THREE.Vector3(), q: new THREE.Quaternion() };
+  const _shk = new THREE.Vector3();
+  /** Kick the render-only camera shake (metres at the start, decays ~0.3s). */
+  function shakeCam(a: number): void {
+    shakeAmp = Math.max(shakeAmp * Math.exp(-shakeT * 14), a);
+    shakeT = 0;
+  }
+  /** Boots scuff the dirt as both duelists draw (one puff each, cosmetic). */
+  function drawDust(): void {
+    for (const c of [player, foe]) {
+      const at = c.group.position.clone();
+      at.y = 0.06;
+      gunsmoke.dust(at, _dustDir.set(Math.random() - 0.5, 0, Math.random() - 0.5), "ground");
+    }
+  }
+  const _dustDir = new THREE.Vector3();
   let proneCam = 0; // eased 0..1 toward the player-prone camera framing
 
   // Initial cue per device.
@@ -1953,11 +1985,16 @@ function runDuel(
     raf = requestAnimationFrame(frame);
     const dt = Math.min(clock.getDelta(), 0.1);
     noteFrame(dt);
+    playerSway?.sense(dt);
+    foeSway?.sense(dt);
     // ONE fixed clock for all physics (spec: consistent across 60/144/165Hz,
     // delta-time not frame count). Rendering interpolates by alpha below.
     const alpha = stepper.advance(dt, () => {
       machine.step(STEP);
-      if (drawTick < 0 && (machine.phase === "draw" || machine.phase === "fire")) drawTick = machine.tick;
+      if (drawTick < 0 && (machine.phase === "draw" || machine.phase === "fire")) {
+        drawTick = machine.tick;
+        drawDust();
+      }
       if (machine.phase === "focus" && !machine.paused) qte.advance(STEP);
       // Bloom after DRAW: holding without firing regrows the base (locked
       // 09-26 §1); shots kick it x1.5 and hits rubber-band it out, both
@@ -1976,6 +2013,8 @@ function runDuel(
       // Corpse physics lives on the same fixed clock (null-safe).
       try { if (foeDoll?.fallen) foeDoll.fixedStep(STEP); } catch { /* fallback already fell */ }
       try { if (playerDoll?.fallen) playerDoll.fixedStep(STEP); } catch { /* noop */ }
+      playerSway?.fixedStep(STEP);
+      foeSway?.fixedStep(STEP);
     });
     // Render: live duelists shadow their pose into kinematic bodies every
     // frame so death starts from the exact live pose; corpses draw the
@@ -2155,7 +2194,29 @@ function runDuel(
     street?.tick(nowSec);
     hellSet?.tick(nowSec);
     ambientFx.tick(nowSec, renderer.getPixelRatio());
-    renderer.render(scene, camera);
+    playerSway?.render(alpha);
+    foeSway?.render(alpha);
+    // Hit shake is render-only: offset the camera for this draw and put it
+    // back, so aim, projection and hit tests never see it.
+    shakeT += dt;
+    const amp = shakeAmp * Math.exp(-shakeT * 14);
+    if (amp > 1e-4) {
+      camSaved.p.copy(camera.position);
+      camSaved.q.copy(camera.quaternion);
+      const t = shakeT * 60;
+      _shk.set(Math.sin(t * 0.91) + 0.5 * Math.sin(t * 2.3), Math.sin(t * 1.13 + 1) + 0.5 * Math.sin(t * 2.9), 0)
+        .multiplyScalar(amp).applyQuaternion(camera.quaternion);
+      camera.position.add(_shk);
+      camera.rotateZ(amp * 0.3 * Math.sin(t * 1.7));
+      camera.updateMatrixWorld();
+      render();
+      camera.position.copy(camSaved.p);
+      camera.quaternion.copy(camSaved.q);
+      camera.updateMatrixWorld();
+    } else {
+      shakeAmp = 0;
+      render();
+    }
   }
   frame();
 }

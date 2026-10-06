@@ -137,6 +137,16 @@ def slim_glb(path):
                     raw, tg = raw_of(a)
                     remap[key] = add(raw, a, tg)
                 pr["indices"] = remap[key]
+    # Animated GLBs (cowboys): carry the clip keyframes over too.
+    for an in j.get("animations", []):
+        for s in an["samplers"]:
+            for k in ("input", "output"):
+                key = (s[k], "anim")
+                if key not in remap:
+                    a = dict(acc[s[k]])
+                    raw, _ = raw_of(a)
+                    remap[key] = add(raw, a, None)
+                s[k] = remap[key]
     while len(out) % 4:
         out.append(0)
     j["accessors"], j["bufferViews"] = new_acc, new_views
