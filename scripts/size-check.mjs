@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const dir = process.argv[2] ?? "dist-basic";
+const dir = process.argv[2] ?? "dist";
 const budgetMB = Number(process.argv[3] ?? 20);
 
 function bytes(p) {

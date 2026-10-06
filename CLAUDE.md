@@ -2,7 +2,7 @@
 
 @AGENTS.md
 
-AGENTS.md holds the project rules (dual build, adapter gating, git workflow, commands). This file adds the map, QA rules, locked design and gotchas distilled from `specs/`, `context/` and the code.
+AGENTS.md holds the project rules (single SDK build, adapter gating, git workflow, commands). This file adds the map, QA rules, locked design and gotchas distilled from `specs/`, `context/` and the code.
 
 ## Read first
 - `context/`: design is spread across all dated files (2026-09-24 … 2026-10-02). Read newest to oldest; later "corrections" sections override earlier numbers. Append-only: same-day edits go in the same file.
@@ -14,19 +14,18 @@ AGENTS.md holds the project rules (dual build, adapter gating, git workflow, com
 - When the task is done or cancelled, delete its file. `short-term-tasks/` only holds live work; the history lives in `context/` and git. (`tasks/` is the older long-form folder.)
 
 ## Architecture
-- `src/main-basic.ts` / `src/main-full.ts` (4 lines each) call `boot(root, adapter)` from `src/ui/home.ts`. There is no `src/boot.ts`.
+- `src/main.ts` creates `createCrazyGamesAdapter()`, awaits `init()` (loads the CrazyGames SDK v3 at runtime, never rejects) and calls `boot(root, adapter)` from `src/ui/home.ts`. There is no `src/boot.ts`.
 - `src/ui/home.ts` (~1800 lines): home, shop, `runSeries` (best-of-3, first to 2), `runDeathmatch` (endless 3-duel loops, HP carries over), `runDuel` (frame loop, hits, wounds, revive, AI scheduler). DEV-only `window.__gamey` probe.
 - `src/ui/focus.ts`: focus timing-QTE ring (SVG on the foe's body, radius = crosshair radius; draw + Space/Enter); the QTE logic is `src/game/timingQte.ts` (fixed clock, seeded). iOS audio resume on `touchend` lives in `boot` (`home.ts`).
-- `src/portal/`: `PortalAdapter.ts` (interface + `Progress`), `NoopAdapter.ts` (real basic impl), `CrazyGamesAdapter.ts` (stub, no SDK yet).
+- `src/portal/`: `PortalAdapter.ts` (interface + `Progress`; `init()`, `adsEnabled`, `kind` "sdk"/"none"), `CrazyGamesAdapter.ts` (real SDK: game events, Data-module saves, user; falls back to `NoopAdapter` on any failure), `NoopAdapter.ts` (no-SDK mode, SafeStore saves), `config.ts` (`ADS_ENABLED=false` until Full, SDK URL, 4s load timeout).
 - `src/game/`: pure logic (`DuelMachine` seeded 60Hz + `rollWound`, `damage`, `economy`, `projectiles`, `Transport`, `fixedStep`). Never import render, DOM, or SDK here.
 - Frame loop (`home.ts` `frame()`): one `createFixedStepper` (`src/game/fixedStep.ts`) runs `machine.step`, recoil recover, `stepBullets()` and ragdoll `fixedStep(h)` inside its fixed callback; afterwards `doll.follow()` (alive) / `doll.sync(alpha)` (corpse) and `renderBullets(alpha)` interpolate. New physics goes inside that callback, never per frame.
 - `src/render/`: `arena`, `cowboy` (procedural fallback), `cowboyGlb`, `streetGlb`, `ragdoll` (cannon-es, 10 bodies), `smoke`, `hell` (lazy chunk).
 - `src/store/SafeStore.ts`: the only way to touch localStorage (key `gamey.v1`).
-- Build selection is by entry file. `__GAMEY_BUILD__` is defined in `vite.config.ts` but unused in `src/`.
 - `blender/cowboys.blend` stays out of `public/` so it doesn't ship. GLBs live in `public/models/`.
 
 ## Commands (beyond AGENTS.md)
-- `npm run size:full` (50MB budget), `play`, `play:mobile`, `play:record`, `test:headed`.
+- `play`, `play:mobile`, `play:record`, `test:headed`. Dev without the SDK: `basic.html?nosdk=1`; on localhost the SDK runs in `local` mode (console-logged events, demo data).
 - `npm run test:physics` (in `npm test`): pure-Node check that a synthetic ragdoll + bullets are bit-identical at 30/60/120/144/165/240Hz and never stall a rendered frame. `npm run build:models`: regenerate the cowboy GLBs; `npm run build:street`: regenerate `street.glb` (see Gotchas).
 - `ai:play*` needs the dev server on port 5174 and fetches `tsx` via `npx` (not a dependency).
 - Playwright specs in `tests/` (`duel-combat`, `duel-wounds`, `visual-duel`, ...) run against the dev server. They are NOT part of `npm test`, and `tests/` is not typechecked.
@@ -37,13 +36,13 @@ AGENTS.md holds the project rules (dual build, adapter gating, git workflow, com
 - Phase-2 slice gate: `ai:play` and `ai:play:mobile` with zero errors.
 
 ## CrazyGames QA rules that affect code
-- Size: 50MB initial, 20MB for mobile homepage. With no SDK, total counts as initial.
+- Size: 50MB initial, 20MB for mobile homepage (`npm run size` enforces 20MB on `dist/`).
 - Legible at DPR=1 from 907x510 to 1920x1080 and mobile 800x450.
 - Physics must hold at 60/144/165Hz: everything runs on the shared fixed 1/60s stepper and renders interpolated by alpha. Never step by frame count.
 - English required. Avoid Esc and Ctrl/Cmd+W. No custom fullscreen button. No cross-promo.
 - `user-select:none`. Resume the `AudioContext` inside a gesture. Relative paths only.
 - Guests can always play. No external logins.
-- Ads off (basic build): no freezes, no dead rewarded buttons. Rewarded ads are optional with an equal-size no-ad option.
+- Ads off (`ADS_ENABLED=false`, required in Basic Launch): no "watch ad" buttons at all (`adapter.adsEnabled`), no freezes. Rewarded ads are optional with an equal-size no-ad option.
 
 ## Locked design (summary)
 - Cowboy duel, right-shoulder PERSPECTIVE 3rd-person camera (player left third, foe right of centre; `context/2026-10-05.md` §9), no blood (dust puff only).
@@ -54,7 +53,7 @@ AGENTS.md holds the project rules (dual build, adapter gating, git workflow, com
 - AI reaction: `base * 0.97^round * 0.94^level`, floor 180ms.
 - Double KO leads to hell sudden-death: ONE round, full cylinders, first landed hit wins (any body hit kills), never repeats (all-miss = drawn round), no revive in hell. `context/2026-10-05.md` §12.
 - Wound lottery: hit 1 = crouch (lunge), hit 2+ = crouch 60 / prone 40 (prone = on the back). Prone is final for the round (later hits keep the duelist down). `bend` stays in the tables but is never rolled. Wounds never gate lethality.
-- Revive: one token per game, singleplayer only. Revive ad is Full-only.
+- Revive: one token per game, singleplayer only. Revive ad only when `adapter.adsEnabled`.
 
 ## Gotchas
 - GLB export: apply modifiers, use active collection only. The loader culls named objects not starting with `H_` or `O_`. Models self-center. All GLB and ragdoll code must be null-safe with a procedural fallback.

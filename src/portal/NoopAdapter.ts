@@ -3,11 +3,15 @@ import { safeLoad, safeSave } from "../store/SafeStore";
 
 const KEY = "gamey.v1";
 
-// CrazyGames Basic Launch: no SDK bytes. Ads disabled; rewarded UI must be
-// hidden by the game (never dead-clickable). All ad calls resolve no-fill.
+// No-SDK mode: SafeStore saves, no-op game events, ads resolve no-fill (and
+// adsEnabled=false hides every rewarded button). Used directly with ?nosdk=1
+// and as CrazyGamesAdapter's fallback when the SDK can't load (adblock,
+// offline, other sites).
 export function createNoopAdapter(): PortalAdapter {
   return {
-    kind: "basic",
+    kind: "none",
+    adsEnabled: false,
+    async init() {},
     gameplayStart() {},
     gameplayStop() {},
     loadingStart() {},

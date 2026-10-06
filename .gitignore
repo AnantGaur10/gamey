@@ -1,6 +1,5 @@
 node_modules/
-dist-basic/
-dist-full/
+dist/
 test-results/
 playwright-report/
 *.log

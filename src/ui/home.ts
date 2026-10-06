@@ -136,7 +136,7 @@ function showShop(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager
     <div class="srow"><button data-b="buy-gold">GOLD GUN — ${SHOP_PRICES.gold}g (+40% gold, weaker 37dmg)</button></div>
     <div class="srow"><button data-b="buy-revive">REVIVE TOKEN — ${SHOP_PRICES.revive}g (max 1 held, once per game)</button></div>
     <div class="srow"><button data-b="equip-default">EQUIP DEFAULT</button> <button data-b="equip-life">EQUIP LIFESTEAL</button> <button data-b="equip-gold">EQUIP GOLD</button></div>
-    ${adapter.kind === "full" ? `<div class="srow"><button data-b="ad-gold">WATCH AD FOR +10g (Full only)</button></div>` : ``}
+    ${adapter.adsEnabled ? `<div class="srow"><button data-b="ad-gold">WATCH AD FOR +10g</button></div>` : ``}
     <div class="smsg"></div>
     <div class="srow"><button data-b="tutorial">REPLAY TUTORIAL</button></div>
     <button data-b="back">BACK</button>
@@ -175,7 +175,7 @@ function showShop(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager
   shop.querySelector("[data-b=equip-life]")!.addEventListener("click", () => equip("lifesteal"));
   shop.querySelector("[data-b=equip-gold]")!.addEventListener("click", () => equip("gold"));
   const adBtn = shop.querySelector("[data-b=ad-gold]");
-  if (adBtn && adapter.kind === "full") {
+  if (adBtn && adapter.adsEnabled) {
     adBtn.addEventListener("click", async () => {
       const ok = await adapter.requestRewarded("shop-gold");
       if (ok) {
@@ -1560,12 +1560,12 @@ function runDuel(
     const price = reviveDeathPrice(SHOP_PRICES.revive);
     const hasToken = p.reviveToken >= 1;
     const canBuy = p.gold >= price;
-    if (!hasToken && !canBuy && adapter.kind !== "full") { onDecline(); return; }
+    if (!hasToken && !canBuy && !adapter.adsEnabled) { onDecline(); return; }
     const ov = el(`<div class="revive" style="position:absolute;left:50%;top:58%;transform:translate(-50%,-50%);background:rgba(20,10,5,.92);border:2px solid #d4af37;border-radius:12px;padding:16px 20px;color:#ffe9bd;text-align:center;z-index:20;">
       <div style="font-weight:800;letter-spacing:.1em;">REVIVE? — 1HP, SAME ROUND REST bloomS FRESH</div>
       <div style="font-size:13px;opacity:.9;margin:6px 0;">${hasToken ? "Use your token (once per game)." : `Emergency buy ${price}g (1.5× shop).`}</div>
       <div><button data-r="yes">${hasToken ? "USE TOKEN" : `BUY + REVIVE (${price}g)`}</button>
-      ${adapter.kind === "full" ? `<button data-r="ad">WATCH AD INSTEAD</button>` : ``}
+      ${adapter.adsEnabled ? `<button data-r="ad">WATCH AD INSTEAD</button>` : ``}
       <button data-r="no">STAY DOWN</button></div>
     </div>`);
     root.appendChild(ov);

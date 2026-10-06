@@ -14,9 +14,9 @@
   </head>
   <body>
     <h1>gamey QA iframe matrix (DPR=1 check + all portal sizes)</h1>
-    <p>Serve <code>dist-basic</code> (e.g. <code>npx vite preview</code>) then load this page. Each frame forces DPR=1 readability review.
+    <p>Serve <code>dist</code> (e.g. <code>npx vite preview</code>) then load this page. Each frame forces DPR=1 readability review.
     Phase-2 targets: play Standard best-of-3 → R2 grades evening, R3 night (foe must stay readable); force a double KO for the hell 1-bullet loop;
-    shop buy/equip + revive offer must show zero dead buttons in basic (ad button is Full-only).</p>
+    shop buy/equip + revive offer must show zero dead buttons (ad buttons only exist while ADS_ENABLED is on).</p>
     <div class="grid" id="grid"></div>
     <script>
       const sizes = [

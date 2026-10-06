@@ -24,7 +24,14 @@ export function defaultProgress(): Progress {
 }
 
 export interface PortalAdapter {
-  readonly kind: "basic" | "full";
+  /** "sdk" = CrazyGames SDK live, "none" = no SDK (load failed / ?nosdk / other site). */
+  readonly kind: "sdk" | "none";
+  /** Rewarded/midgame ads may be offered. Game code shows "watch ad" buttons
+      ONLY when true (Basic Launch QA: no dead rewarded buttons). */
+  readonly adsEnabled: boolean;
+  /** Bring the portal up before boot(). Never rejects: on any failure the
+      adapter keeps working in no-SDK mode. */
+  init(): Promise<void>;
   gameplayStart(): void;
   gameplayStop(): void;
   loadingStart(): void;

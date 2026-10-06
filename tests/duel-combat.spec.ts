@@ -137,10 +137,15 @@ test.describe('Gamey - Combat', () => {
           // still stalled past the old 0.12s freeze; the zone respawns once the 0.4s stall ends
           setTimeout(() => {
             const stalled = g.qte().frozen;
-            setTimeout(() => {
+            // Wait for the stall to end on the GAME clock (slow software-GL
+            // frames make 0.4s of game time take ~1s+ of wall time).
+            const t0 = performance.now();
+            const done = () => {
               const a = g.qte();
+              if (a.frozen && performance.now() - t0 < 3000) { setTimeout(done, 50); return; }
               resolve({ b0: q.bloom, b1: a.bloom, misses: a.misses, w0: q.zoneW, w1: a.zoneW, c0: q.zoneC, c1: a.zoneC, stalled });
-            }, 700);
+            };
+            done();
           }, 200);
           return;
         }
