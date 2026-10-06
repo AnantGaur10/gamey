@@ -251,6 +251,21 @@ console.log("== focus QTE multipliers ==");
   q.setSize(0);
   ok(t0 > t1 && t1 > q.traverseSec, `smaller crosshair -> faster needle (${t0.toFixed(3)} > ${t1.toFixed(3)} > ${q.traverseSec.toFixed(3)}s)`);
   ok(mk().rollWound(3, "prone") === "prone" && mk().rollWound(5, "prone") === "prone", "prone stays prone on later hits");
+  // Hit reverses the needle; a miss stalls it 0.4s and keeps the zone width.
+  const h = new TimingQte(42);
+  h.pos = h.zoneC; // stand on the zone centre: perfect
+  const dir0 = h.dir;
+  ok(h.press(0) === "perfect" && h.dir === -dir0, "a hit reverses the needle");
+  const mq = new TimingQte(42);
+  mq.pos = mq.zoneC > 0.5 ? 0 : 1; // far from the zone: miss
+  const w0 = mq.zoneW;
+  ok(mq.press(0) === "miss" && mq.zoneW === w0, "a miss keeps the zone width");
+  let stall = 0;
+  while (mq.frozen && stall < 120) { mq.advance(STEP); stall++; }
+  ok(stall >= 24 && stall <= 25, `a miss stalls the needle ~0.4s (${stall} ticks)`);
+  const sq = new TimingQte(42);
+  sq.stun();
+  ok(sq.frozen && sq.stunned && sq.misses === 1, "click miss (stun) stalls the needle too");
   m = mk();
   m.addMiss();
   ok(near(m.bloomDeg, 3.12), `click miss x1.3 too: 2.4 -> ${m.bloomDeg.toFixed(3)}`);

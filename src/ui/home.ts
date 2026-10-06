@@ -244,20 +244,24 @@ function runDuel(
   // Round index drives time-of-day + the AI profile; deathmatch walks the
   // 3-profile roster per loop and the level (0.94^level) goes up each loop.
   const rIdx = series?.roundIndex ?? (run ? run.streak % AI_ROSTER.length : 0);
+  // Stage = decided rounds only (user 2026-10-06): a drawn round (or a drawn
+  // hell) replays at the same time of day vs the same opponent; roundIndex
+  // still counts for the ROUND line.
+  const stageIdx = series ? series.pWins + series.fWins : rIdx;
   const level = run ? Math.floor(run.streak / AI_ROSTER.length) : 0;
   // Wind picks up as the day goes (noon breeze -> night gusts; hell roars).
-  audio.startWind(hellRound ? 0.8 : [0.45, 0.65, 0.85][Math.min(rIdx, 2)], hellRound);
+  audio.startWind(hellRound ? 0.8 : [0.45, 0.65, 0.85][Math.min(stageIdx, 2)], hellRound);
 
   const { scene, camera, renderer, render, disposePost, worldPerPxAt, fitCamera, setTimeOfDay, noteFrame, setProneFrame } = createArena(distM);
   // Time-of-day driver: R1 noon → R2 evening → R3+ night. Hell overrides.
-  setTimeOfDay(hellRound ? HELL : timeOfDayForRound(rIdx));
+  setTimeOfDay(hellRound ? HELL : timeOfDayForRound(stageIdx));
   document.body.style.background = hellRound
     ? "linear-gradient(#0d0202 0%, #3a0a06 60%, #ff3a12 100%)"
-    : cssSkyForRound(rIdx);
+    : cssSkyForRound(stageIdx);
   root.appendChild(renderer.domElement);
   // Lens vignette (CSS, plain alpha): darker variant for night + hell.
   const vignette = el(`<div class="vignette"></div>`);
-  vignette.classList.toggle("dark", hellRound || rIdx >= 2);
+  vignette.classList.toggle("dark", hellRound || stageIdx >= 2);
   root.appendChild(vignette);
   fitCamera();
   // Hell visuals: lazy chunk, never in the initial payload (QA gate). The
@@ -278,10 +282,10 @@ function runDuel(
   const gunsmoke = createGunsmoke(scene);
   // Unlit smoke/dust sprites follow the scene's light level (noon → night).
   const spriteLight = (i: number, hell: boolean) => (hell ? 0.5 : [1, 0.8, 0.4][Math.min(i, 2)]);
-  gunsmoke.setAmbient(spriteLight(rIdx, hellRound));
+  gunsmoke.setAmbient(spriteLight(stageIdx, hellRound));
   // Air particles: dust motes / fireflies / embers by time of day.
   const ambientFx = createAmbient(scene, distM);
-  ambientFx.setTimeOfDay(rIdx, hellRound);
+  ambientFx.setTimeOfDay(stageIdx, hellRound);
 
   // True projectiles (Slice 1): pooled sim + visible bullet meshes. Net seam:
   // every shot emits Fire{pos,dir,gunId,tick} / Hit{tick,head,damage} over
@@ -355,11 +359,11 @@ function runDuel(
   const shadowStrength = (i: number, hell: boolean) => (hell ? 0.4 : [0.62, 0.66, 0.3][Math.min(i, 2)]);
   const playerShadow = createShadowDecal(scene);
   const foeShadow = createShadowDecal(scene);
-  for (const d of [playerShadow, foeShadow]) d.setStrength(shadowStrength(rIdx, hellRound));
+  for (const d of [playerShadow, foeShadow]) d.setStrength(shadowStrength(stageIdx, hellRound));
   // Night: the fog between the duelists swallows the foe (arena NIGHT
   // fog); only its muzzle flash cuts through. Its shadow decal and duel
   // marker would outline it from under the fog, so they go too.
-  const nightBlind = !hellRound && mode !== "tutorial" && rIdx >= 2;
+  const nightBlind = !hellRound && mode !== "tutorial" && stageIdx >= 2;
   if (nightBlind) foeShadow.setStrength(0);
   {
     const fm = scene.getObjectByName("FoeMarker");
@@ -417,7 +421,7 @@ function runDuel(
       const old = scene.getObjectByName(n);
       if (old) old.visible = false;
     }
-    s.setGlow(hellRound ? 1 : [0, 0.55, 1][Math.min(rIdx, 2)]);
+    s.setGlow(hellRound ? 1 : [0, 0.55, 1][Math.min(stageIdx, 2)]);
     scene.add(s.group);
     street = s;
   });
@@ -713,7 +717,7 @@ function runDuel(
       /** Jump straight into a hell sudden-death round (repro/tests). */
       hell: (d?: number) => { cleanup(); runDuel(root, adapter, mode, audio, series, true, reviveUsed, { run, distM: d }); },
       /** Jump to best-of round i (0 noon, 1 evening, 2 night) at 1-1. */
-      round: (i: number, d?: number) => { cleanup(); runDuel(root, adapter, "standard", audio, { roundIndex: i, pWins: Math.min(i, 1), fWins: Math.min(i, 1) }, false, reviveUsed, { distM: d }); },
+      round: (i: number, d?: number) => { cleanup(); runDuel(root, adapter, "standard", audio, { roundIndex: i, pWins: Math.min(Math.ceil(i / 2), 1), fWins: Math.min(Math.floor(i / 2), 1) }, false, reviveUsed, { distM: d }); },
       state: () => ({ phase: machine.phase, roundOver, playerHP, foeHP, ammo, foeAmmo, hell: hellRound, live: sim.bullets.filter((b) => b.alive).length, night: nightBlind, fog: (scene.fog as THREE.FogExp2).density, distM }),
       /** Revolver state + world position (quick-draw checks). */
       gun: (side: "player" | "foe") => {
@@ -1657,10 +1661,10 @@ function runDuel(
   // ---- AI fire (Slice 2): same projectile path, symmetric ----
   function scheduleFoe(): void {
     if (mode === "tutorial") return; // dummy stays passive
-    const ai = AI_ROSTER[clamp(rIdx, 0, AI_ROSTER.length - 1)];
+    const ai = AI_ROSTER[clamp(stageIdx, 0, AI_ROSTER.length - 1)];
     // Hasted AI (user-tuned): 0.85× reaction, quicker follow-ups. Damage and
     // accuracy untouched — duels get fiercer, not cheaper.
-    const reaction = Math.max(180, ai.reactionBaseMs * 0.85 * Math.pow(0.97, rIdx) * Math.pow(0.94, level));
+    const reaction = Math.max(180, ai.reactionBaseMs * 0.85 * Math.pow(0.97, stageIdx) * Math.pow(0.94, level));
     let shots = 0;
     const maxShots = foeAmmo;
     const shootOnce = () => {
@@ -1805,6 +1809,7 @@ function runDuel(
       zoneW: qte.zoneW,
       perfectW: qte.perfectW,
       streak: qte.streak,
+      stunned: qte.stunned,
       x: c.x,
       y: c.y,
       r: Math.max(RING_MIN_R, crossPx() / 2),
@@ -1851,6 +1856,7 @@ function runDuel(
       if (coarse) qtePress();
       else {
         machine.addMiss();
+        qte.stun(); // same 0.4s needle stall as a QTE miss (anti-spam)
         qteSpeedFromBloom();
         focusUI.flash("miss");
         focusPenalty();
@@ -2067,7 +2073,7 @@ function runDuel(
       if (drawTick < 0 && (machine.phase === "draw" || machine.phase === "fire")) {
         drawTick = machine.tick;
         drawDust();
-        const fq = AI_ROSTER[clamp(rIdx, 0, AI_ROSTER.length - 1)].focusQuality;
+        const fq = AI_ROSTER[clamp(stageIdx, 0, AI_ROSTER.length - 1)].focusQuality;
         foeAim.bloomDeg = foeGun.bloomStartDeg - (foeGun.bloomStartDeg - foeGun.bloomMinDeg) * fq;
       }
       if (machine.phase === "focus" && !machine.paused) qte.advance(STEP);

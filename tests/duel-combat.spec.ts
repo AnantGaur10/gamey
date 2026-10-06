@@ -121,22 +121,27 @@ test.describe('Gamey - Combat', () => {
     expect(parseFloat(after.fill || '0')).toBeGreaterThan(parseFloat(before.fill || '0'));
   });
 
-  test('QTE miss: bloom grows, zone widens and moves', async ({ page }) => {
+  test('QTE miss: bloom grows, needle stalls, zone keeps its width and moves', async ({ page }) => {
+    // Anti-spam (user 2026-10-06): a miss stalls the needle 0.4s and no longer
+    // widens the zone.
     await startStandard(page);
     await parkInHolster(page);
     await page.waitForTimeout(300);
-    const r = await page.evaluate(() => new Promise<{ b0: number; b1: number; misses: number; w0: number; w1: number; c0: number; c1: number }>((resolve) => {
+    const r = await page.evaluate(() => new Promise<{ b0: number; b1: number; misses: number; w0: number; w1: number; c0: number; c1: number; stalled: boolean }>((resolve) => {
       type Q = { needle: number; zoneC: number; zoneW: number; frozen: boolean; misses: number; bloom: number };
       const g = (window as unknown as { __gamey: { qte(): Q } }).__gamey;
       const loop = () => {
         const q = g.qte();
         if (!q.frozen && Math.abs(q.needle - q.zoneC) > q.zoneW) {
           window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', bubbles: true }));
-          // zone respawns after the 0.12s result freeze
+          // still stalled past the old 0.12s freeze; the zone respawns once the 0.4s stall ends
           setTimeout(() => {
-            const a = g.qte();
-            resolve({ b0: q.bloom, b1: a.bloom, misses: a.misses, w0: q.zoneW, w1: a.zoneW, c0: q.zoneC, c1: a.zoneC });
-          }, 250);
+            const stalled = g.qte().frozen;
+            setTimeout(() => {
+              const a = g.qte();
+              resolve({ b0: q.bloom, b1: a.bloom, misses: a.misses, w0: q.zoneW, w1: a.zoneW, c0: q.zoneC, c1: a.zoneC, stalled });
+            }, 700);
+          }, 200);
           return;
         }
         setTimeout(loop, 4);
@@ -144,8 +149,9 @@ test.describe('Gamey - Combat', () => {
       loop();
     }));
     expect(r.misses).toBe(1);
+    expect(r.stalled).toBe(true);
     expect(r.b1).toBeGreaterThan(r.b0);
-    expect(r.w1).toBeGreaterThan(r.w0);
+    expect(r.w1).toBeCloseTo(r.w0, 6);
     expect(r.c1).not.toBeCloseTo(r.c0, 3);
   });
 

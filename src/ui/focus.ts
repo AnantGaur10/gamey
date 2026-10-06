@@ -2,8 +2,9 @@
 // ring sits on the foe's body and its radius IS the crosshair radius, so it
 // shrinks/grows with every result. A marker swings back and forth around the
 // ring (the gap at the top is where it turns); press while it is on the gold
-// arc. Every press moves the arc; a hit narrows it (and speeds the marker),
-// a miss widens it. Logic lives in src/game/timingQte.ts; this file only draws.
+// arc. Every press moves the arc; a hit narrows it and reverses the marker
+// (which speeds up as the crosshair shrinks), a miss stalls the marker red
+// for 0.4s. Logic lives in src/game/timingQte.ts; this file only draws.
 // - PC: Space / Enter presses (key repeat ignored). Mouse clicks are a miss
 //   (home.ts routes them; the mouse stays in the holster).
 // - Touch: a tap anywhere outside the holster presses (home.ts routes it).
@@ -20,6 +21,8 @@ export interface QteView {
   zoneW: number;
   perfectW: number;
   streak: number;
+  /** Miss stall running: the needle draws red (anti-spam feedback). */
+  stunned?: boolean;
   /** Ring centre in viewport px (the foe's body) and radius in px. */
   x: number;
   y: number;
@@ -118,6 +121,7 @@ export function mountFocusUI(root: HTMLElement, h: FocusHandlers): FocusUI {
       ui.style.left = `${v.x - rr.left}px`;
       ui.style.top = `${v.y - rr.top}px`;
       ui.style.setProperty("--qr", `${c}px`);
+      ui.classList.toggle("stunned", !!v.stunned);
       baseEl.setAttribute("d", arc(c, r, 0, 1));
       zoneEl.setAttribute("d", arc(c, r, v.zoneC - v.zoneW / 2, v.zoneC + v.zoneW / 2));
       perfEl.setAttribute("d", arc(c, r, v.zoneC - v.perfectW / 2, v.zoneC + v.perfectW / 2));

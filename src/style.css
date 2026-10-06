@@ -121,6 +121,7 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 .qte .qzone { stroke: rgba(224, 170, 56, 0.95); stroke-width: 7px; stroke-linecap: butt; }
 .qte .qperfect { stroke: #fff1b8; stroke-width: 7px; stroke-linecap: butt; }
 .qte .qneedle { stroke: #fff; stroke-width: 4px; }
+.qte.stunned .qneedle { stroke: #ff6a5a; } /* miss stall (anti-spam) */
 .qte .qinfo {
   position: absolute; left: -90px; width: 180px; top: calc(var(--qr) + 2px);
   display: flex; justify-content: center; gap: 10px; height: 20px;

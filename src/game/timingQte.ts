@@ -1,7 +1,10 @@
 // Focus timing QTE (user ask 2026-10-05, replaces Space mashing): a needle
 // ping-pongs across a bar; press while it sits in the gold zone. Every press
-// moves the zone; a hit narrows it, a miss widens it, and the needle speed
-// follows the crosshair (smaller = faster, setSize), so the skill is chaining as many hits as possible before DRAW. Pure + seeded: advanced
+// moves the zone; a hit narrows it and REVERSES the needle, the needle speed
+// follows the crosshair (smaller = faster, setSize), and a miss stalls the
+// needle MISS_STUN_SEC without widening the zone (anti-spam, 2026-10-06:
+// mashing used to reach ~0.05° because misses were cheap and widened the
+// zone), so the skill is chaining as many hits as possible before DRAW. Pure + seeded: advanced
 // only on the shared fixed clock (never per frame), judged at sub-tick time.
 
 import { mulberry32 } from "./DuelMachine";
@@ -12,11 +15,10 @@ const TRAVERSE0_SEC = 0.48; // needle 0 -> 1 at the full (start) crosshair
 const TRAVERSE_MIN_SEC = 0.25; // ... and at the smallest crosshair
 const ZONE0 = 0.22; // zone width as a fraction of the bar
 const ZONE_MIN = 0.08;
-const ZONE_MAX = 0.32;
 const ZONE_SHRINK_PER_HIT = 0.86;
-const ZONE_GROW_PER_MISS = 1.18;
 const PERFECT_FRAC = 0.3; // centre band of the zone that counts as perfect
 const FREEZE_SEC = 0.12; // needle holds where it stopped (result readable)
+const MISS_STUN_SEC = 0.4; // a miss stalls the needle this long (anti-spam)
 // Every press respawns the zone AHEAD of the needle (along its travel,
 // bounces included) at this distance: never under it, never a full lap away,
 // so the 3s window fits many attempts (~8-10).
@@ -73,6 +75,20 @@ export class TimingQte {
     return this.freezeLeft > 0;
   }
 
+  /** Miss stall running (the UI draws the needle red). */
+  get stunned(): boolean {
+    return this.freezeLeft > 0 && this.last === "miss";
+  }
+
+  /** A miss from outside the ring (PC click during Focus): same stall. */
+  stun(): void {
+    this.misses += 1;
+    this.streak = 0;
+    this.last = "miss";
+    this.freezeLeft = Math.max(this.freezeLeft, MISS_STUN_SEC);
+    this.respawn = true;
+  }
+
   get perfectW(): number {
     return this.zoneW * PERFECT_FRAC;
   }
@@ -111,20 +127,24 @@ export class TimingQte {
   /** Player pressed. null = ignored (needle still showing the last result). */
   press(extraSec: number): QteResult | null {
     if (this.freezeLeft > 0) return null;
-    const p = this.peek(extraSec);
-    const d = Math.abs(p - this.zoneC);
+    // Stop point incl. direction (peek() only reports the position; a
+    // bounce since the last tick also flipped the travel).
+    const b = bounce(this.pos, (this.dir * Math.max(0, extraSec)) / this.traverseSec);
+    const d = Math.abs(b.pos - this.zoneC);
     const res: QteResult = d <= this.perfectW / 2 ? "perfect" : d <= this.zoneW / 2 ? "good" : "miss";
-    this.pos = p;
-    this.freezeLeft = FREEZE_SEC;
+    this.pos = b.pos;
+    this.dir = b.dir;
     this.last = res;
     if (res === "miss") {
       this.misses += 1;
       this.streak = 0;
-      this.zoneW = Math.min(ZONE_MAX, this.zoneW * ZONE_GROW_PER_MISS);
+      this.freezeLeft = MISS_STUN_SEC;
     } else {
       this.hits += 1;
       this.streak += 1;
       this.zoneW = Math.max(ZONE_MIN, this.zoneW * ZONE_SHRINK_PER_HIT);
+      this.dir = this.dir === 1 ? -1 : 1; // user 2026-10-06: a hit reverses the needle
+      this.freezeLeft = FREEZE_SEC;
     }
     this.respawn = true; // new position after every press
     return res;
