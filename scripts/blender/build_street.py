@@ -774,6 +774,9 @@ def build():
     prickly((-15.0, 3.2, 0.0), 0.55)
     prickly((16.5, 3.0, 0.0), 0.5)
 
+    left_row()
+    backdrop()
+
     flush_walls()
 
     # tumbleweed: sticks in a ball; the game rolls it across the street
@@ -783,6 +786,147 @@ def build():
             ctr = Vector((0.0, 6.2, 0.38)) + d * rng.uniform(0.0, 0.18)
             box(ctr, (0.025, 0.025, rng.uniform(0.35, 0.6)), jit(lin(0x9a7a46), 0.15),
                 rot=(rng.uniform(0, 3.14), rng.uniform(0, 3.14), rng.uniform(0, 3.14)), skip=())
+
+# ===== left of the livery (user 2026-10-06) =======================================
+# The perspective camera at long duels (up to 25m) sees past the livery: the
+# row continues with a bank, an assay office, a barber and a church whose
+# steeple caps the left end.
+def left_row():
+    boardwalk(-34.0, -20.6)
+    # BANK (stone, columns, no porch roof)
+    x0, x1, yf = -26.2, -20.6, 0.1
+    blocks(x0, x1, 0.32, 5.6, yf, lin(0xc8b494), P["stone_dk"])
+    false_front(x0, x1, 5.6, 6.3, yf, lin(0xc8b494), P["trim_white"], kind="none")
+    box(((x0 + x1) / 2, yf + 0.04, 6.0), (x1 - x0, 0.08, 0.7), lin(0xc8b494))
+    box(((x0 + x1) / 2, yf + 0.12, 4.95), (3.2, 0.08, 0.6), P["wood_dk"])
+    text("BANK", (x0 + x1) / 2, yf + 0.165, 4.95, 0.42, P["gold"], max_w=2.8)
+    door((x0 + x1) / 2, 0.32, 1.3, 2.6, yf, P["trim_white"], lin(0x3a2a1c))
+    for wx in (x0 + 1.0, x1 - 1.0):
+        window(wx, 1.0, 1.0, 1.7, yf, P["trim_white"], panes=(1, 2), bars=True)
+        window(wx, 3.4, 0.9, 1.2, yf, P["trim_white"], panes=(2, 2))
+    for cx in (x0 + 1.9, x1 - 1.9):  # portico columns
+        cyl((cx, yf + 0.9, 0.32), 0.17, 3.7, 8, P["trim_white"])
+        box((cx, yf + 0.9, 4.1), (0.5, 0.5, 0.18), P["trim_white"])
+    box(((x0 + x1) / 2, yf + 0.65, 4.25), (4.4, 1.2, 0.16), P["trim_white"])
+    side_walls(x0, x1, yf, 5.6, lin(0xc8b494))
+    # ASSAY OFFICE (weathered grey siding, porch)
+    x0, x1, yf = -30.4, -26.2, -0.25
+    siding(x0, x1, 0.32, 5.0, yf, P["wood_gray"])
+    false_front(x0, x1, 5.0, 6.2, yf, P["wood_gray"], P["wood_dk"])
+    door(x0 + 1.1, 0.32, 1.0, 2.3, yf, P["wood_dk"], P["wood_mid"])
+    window(x1 - 1.3, 1.0, 1.3, 1.4, yf, P["wood_dk"], panes=(2, 2), goods=True)
+    window((x0 + x1) / 2, 3.6, 1.0, 1.1, yf, P["wood_dk"], panes=(2, 2), curtain=P["paper"])
+    porch_roof(x0, x1, 2.75, y0=0.0, fcol=P["wood_dk"], rcol=P["wood_gray"], sign="ASSAY OFFICE",
+               sign_col=P["paper"])
+    crate((x1 - 0.5, 1.3, 0.32), 0.45)
+    sack((x1 - 1.1, 1.4, 0.32), col=P["sack"])
+    side_walls(x0, x1, yf, 5.0, P["wood_gray"])
+    # BARBER (cream + green, striped pole)
+    x0, x1, yf = -34.0, -30.4, 0.0
+    siding(x0, x1, 0.32, 4.4, yf, P["cream"], amt=0.04)
+    false_front(x0, x1, 4.4, 5.4, yf, P["cream"], P["green"])
+    door(x0 + 0.9, 0.32, 0.9, 2.2, yf, P["green"], P["wood_mid"])
+    window(x1 - 1.2, 0.95, 1.4, 1.5, yf, P["green"], panes=(2, 2), curtain=P["shirt_w"])
+    box(((x0 + x1) / 2, yf + 0.07, 3.35), (2.8, 0.08, 0.5), P["green_dk"])
+    text("BARBER", (x0 + x1) / 2, yf + 0.115, 3.35, 0.3, P["cream"], max_w=2.4)
+    for k in range(8):  # barber pole
+        cyl((x0 + 1.75, yf + 0.25, 0.9 + k * 0.17), 0.08, 0.17, 8,
+            P["bunt_r"] if k % 2 == 0 else P["bunt_w"], caps=(False, k == 7))
+    side_walls(x0, x1, yf, 4.4, P["cream"])
+    # CHURCH (set back, white, gable + steeple: the tower on the left skyline)
+    x0, x1, yf = -41.5, -35.0, -2.0
+    siding(x0, x1, 0.0, 5.0, yf, P["trim_white"], amt=0.03)
+    cx = (x0 + x1) / 2
+    face(((cx, yf + 0.02, 7.4), (x1 + 0.2, yf + 0.02, 5.0), (x0 - 0.2, yf + 0.02, 5.0)), P["trim_white"])
+    for s in (-1, 1):  # roof slopes
+        box((cx + s * (x1 - x0) / 4, yf - 3.0, 6.2), (math.hypot((x1 - x0) / 2, 2.4) + 0.3, 6.4, 0.08),
+            P["wood_dk"], rot=(0, s * math.atan2(2.4, (x1 - x0) / 2), 0), skip=())
+    door(cx, 0.0, 1.4, 2.8, yf, P["wood_dk"], lin(0x6a3a22))
+    for wx in (x0 + 1.2, x1 - 1.2):
+        window(wx, 1.4, 0.8, 2.0, yf, P["trim_white"], panes=(1, 3))
+    box((cx, yf - 0.6, 9.0), (1.6, 1.6, 4.0), P["trim_white"], skip=("-z",))  # tower
+    box((cx, yf + 0.21, 9.6), (0.8, 0.02, 1.2), P["interior"], skip=("-y",))  # belfry opening
+    cyl((cx, yf - 0.6, 11.0), 1.15, 2.6, 4, P["wood_dk"], r2=0.03, rot=(0, 0, math.pi / 4))  # spire
+    box((cx, yf - 0.6, 14.1), (0.1, 0.1, 1.0), P["iron"], skip=())  # cross
+    box((cx, yf - 0.6, 14.3), (0.5, 0.1, 0.1), P["iron"], skip=())
+    side_walls(x0, x1, yf, 5.0, P["trim_white"], back=7.0)
+    # graveyard fence + a few markers beside the church
+    for k in range(14):
+        box((-43.5 + k * 0.35, 1.0, 0.45), (0.06, 0.06, 0.9), jit(P["wood_gray"], 0.15), skip=("-z",))
+    box((-41.2, 1.0, 0.75), (4.6, 0.05, 0.08), P["wood_gray"])
+    for (gx, gy) in ((-42.6, -1.2), (-41.4, -0.6), (-43.3, 0.1)):
+        box((gx, gy, 0.35), (0.08, 0.08, 0.7), P["wood_bleach"], skip=("-z",))
+        box((gx, gy, 0.52), (0.4, 0.08, 0.08), P["wood_bleach"])
+
+# ===== backdrop (user 2026-10-06) ==================================================
+# Long duels widened the view past the town into empty sand + sky. Dead sandy
+# mesas and buttes in three depth layers, camera-facing "curtains" only (the
+# camera never sees their backs), strata bands as vertex colour. Far layers
+# are lighter (dust), and the game's fog hazes them further by time of day.
+def ridge(y, x0, x1, n, hf, cols, rows=5):
+    """Camera-facing ridge at depth y: columns x0..x1, top height hf(x), colour
+    bands by height (strata). Bottom sits below the ground (z -1)."""
+    xs = [x0 + (x1 - x0) * i / n for i in range(n + 1)]
+    hs = [hf(x) for x in xs]
+    for i in range(n):
+        xa, xb, ha, hb = xs[i], xs[i + 1], hs[i], hs[i + 1]
+        if ha <= 0.05 and hb <= 0.05:
+            continue
+        for r in range(rows):
+            za0, za1 = -1 + (ha + 1) * r / rows, -1 + (ha + 1) * (r + 1) / rows
+            zb0, zb1 = -1 + (hb + 1) * r / rows, -1 + (hb + 1) * (r + 1) / rows
+            face(((xa, y, za1), (xb, y, zb1), (xb, y, zb0), (xa, y, za0)), cols[r % len(cols)])
+
+def mesa_profile(seed, plateaus, base=0.0):
+    """Flat-topped mesas: sum of trapezoid plateaus (cx, top_w, foot_w, h)."""
+    def hf(x):
+        h = base
+        for (cx, tw, fw, hh) in plateaus:
+            d = abs(x - cx)
+            if d <= tw / 2:
+                v = hh
+            elif d <= fw / 2:
+                t = (d - tw / 2) / max(1e-6, (fw - tw) / 2)
+                v = hh * (1 - t) ** 1.6
+            else:
+                v = 0.0
+            h = max(h, v)
+        return h
+    return hf
+
+def backdrop():
+    r = random.Random(41)
+    sand = [lin(c) for c in (0xd9a878, 0xcf9a6a, 0xdcae80)]
+    rust = [lin(c) for c in (0xb9774c, 0xa8653e, 0xc4855a, 0x9a5a36)]
+    near = [lin(c) for c in (0xa86a42, 0x925834, 0xb67a4e, 0x83502f)]
+    # far range: long low dusty ridgeline across the whole horizon
+    far = [(x, r.uniform(30, 60), r.uniform(60, 110), r.uniform(26, 50)) for x in range(-300, 301, 55)]
+    ridge(-190.0, -320, 320, 96, mesa_profile(1, far, base=12.0), sand, rows=3)
+    # mid mesas: flat tops, strata
+    mid = [(r.uniform(-230, 230), r.uniform(15, 45), 0, r.uniform(22, 40)) for _ in range(9)]
+    mid = [(cx, tw, tw + r.uniform(18, 36), h) for (cx, tw, _, h) in mid]
+    ridge(-120.0, -260, 260, 130, mesa_profile(2, mid), rust, rows=6)
+    # near buttes + rock spires ("towers") framing both sides of the town
+    nearp = [(-75, 14, 30, 26), (-52, 4, 10, 30), (-40, 2.5, 6, 21), (62, 10, 24, 24), (85, 3, 8, 32),
+             (110, 18, 40, 20), (-110, 20, 44, 19)]
+    ridge(-70.0, -140, 140, 112, mesa_profile(3, nearp), near, rows=7)
+    # windmill + water tower behind the row (silhouettes on the skyline)
+    wx, wy = -29.0, -16.0
+    for s in (-1, 1):
+        box((wx + s * 0.9, wy, 4.5), (0.12, 0.12, 9.2), P["wood_dk"], rot=(0, s * -0.1, 0), skip=())
+    for zz in (2.0, 5.0, 8.0):
+        box((wx, wy, zz), (1.9 - zz * 0.09, 0.1, 0.1), P["wood_dk"], skip=())
+    for k in range(12):
+        a = 2 * math.pi * k / 12
+        box((wx + math.cos(a) * 1.0, wy + 0.3, 9.4 + math.sin(a) * 1.0), (0.18, 0.04, 1.6),
+            P["wood_gray"], rot=(0, a + math.pi / 2, 0), skip=())
+    box((wx + 1.6, wy + 0.2, 9.4), (1.6, 0.04, 0.5), P["wood_gray"], skip=())  # tail vane
+    tx, ty = 26.0, -14.0
+    for s in (-1, 1):
+        for t in (-1, 1):
+            box((tx + s * 1.1, ty + t * 1.1, 3.5), (0.16, 0.16, 7.0), P["wood_dk"], skip=())
+    cyl((tx, ty, 7.0), 1.7, 2.6, 12, P["wood_mid"], caps=(True, False))
+    cyl((tx, ty, 9.6), 1.9, 0.9, 12, P["wood_dk"], r2=0.1)
 
 def star(cx, y, cz, r):
     pts = []
