@@ -148,6 +148,8 @@ function addWater(mat: THREE.Material, uTime: U, uHell: U): void {
         `#include <emissivemap_fragment>
         totalEmissiveRadiance += diffuseColor.rgb * mix(0.18 + 0.22 * wFlow, 0.5, uHell);`,
       );
+    // Lava keeps the normal fog: fog-free (or half-fogged) it hung as crisp
+    // blocks over a cliff the hell haze had swallowed.
   });
 }
 
@@ -239,11 +241,6 @@ export async function loadMapSet(url: string, distM: number, paintGain = 1): Pro
       setHell(on) {
         uHell.value = on ? 1 : 0;
         glow.emissive.setHex(on ? GLOW_HELL : GLOW_DAY);
-        // Lava glows through the hell haze (one recompile, once per round).
-        if (water.fog === on) {
-          water.fog = !on;
-          water.needsUpdate = true;
-        }
       },
       setWindow(hex) {
         sky.color.setHex(hex);

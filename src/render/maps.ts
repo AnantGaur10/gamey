@@ -140,7 +140,9 @@ const FALLS_TOD: TimeOfDay[] = [
     rim: { color: 0xfff6e0, strength: 0.28 },
   }),
   tint(EVENING, {
-    sky: [[0, 0x3a3466], [0.45, 0xa8605a], [0.75, 0xf0a066], [1, 0x8a6a48]],
+    // Top stop near the fog colour: a purple top cut jagged teeth along the
+    // fogged treeline.
+    sky: [[0, 0x9a7270], [0.45, 0xb87c62], [0.75, 0xf0a066], [1, 0x8a6a48]],
     hemiIntensity: 0.62, hemiSky: 0xffc89a, hemiGround: 0x5a5a32,
     dirIntensity: 0.38, dirColor: 0xffa050,
     fogColor: 0xb07a58,

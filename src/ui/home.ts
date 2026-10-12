@@ -789,7 +789,7 @@ function runDuel(
       /** Passive tutorial dummy in a given outfit (ragdoll checks: FOE=<id> ai:ragdoll). */
       tutorial: (foe?: FoeLookId, d?: number) => { cleanup(); runDuel(root, adapter, "tutorial", audio, undefined, false, false, { foe, distM: d, map: mapId }); },
       /** Current map + foe outfit. */
-      where: () => ({ map: mapId, foe: foeLook.id, set: !!mapSet || !!street }),
+      where: () => ({ map: mapId, foe: foeLook.id, set: !!mapSet || !!street || !!hellSet }),
       state: () => ({ phase: machine.phase, roundOver, playerHP, foeHP, ammo, foeAmmo, hell: hellRound, live: sim.bullets.filter((b) => b.alive).length, night: nightBlind, fog: (scene.fog as THREE.FogExp2).density, distM }),
       /** Revolver state + world position (quick-draw checks). */
       gun: (side: "player" | "foe") => {
@@ -1598,7 +1598,8 @@ function runDuel(
     } else {
       r.hp = Math.max(1, playerHP);
     }
-    r.map = rollMap(adapter);
+    // A drawn duel replays vs the same foe on the same map.
+    if (result === "p") r.map = rollMap(adapter);
     runDuel(root, adapter, mode, audio, undefined, false, reviveUsed, { run: r });
   }
 
@@ -2011,6 +2012,9 @@ function runDuel(
     cancelAnimationFrame(raf);
     disposePost();
     renderer.dispose();
+    // Release the GL context now: a long deathmatch otherwise piles up
+    // contexts until Chrome drops the oldest ("Too many active WebGL contexts").
+    renderer.forceContextLoss();
   }
 
   function onResize(): void {
