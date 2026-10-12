@@ -9,6 +9,8 @@ export interface Progress {
   bestBestOf: number;
   /** map: home-screen MAP choice ("random" or a map id, render/maps.ts). */
   settings: { mute: boolean; quality: "low" | "high"; map?: string };
+  /** First-launch tutorial finished or skipped: never forced again. */
+  tutorialDone?: boolean;
 }
 
 export function defaultProgress(): Progress {

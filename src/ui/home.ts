@@ -18,6 +18,7 @@ import { ProjectileSim, testCapsuleHit, CAPSULE_FOR_POSE, capsuleMid, type Bulle
 import { LocalTransport } from "../game/Transport";
 import type { PortalAdapter } from "../portal/PortalAdapter";
 import { mountFocusUI, isCoarsePointer, type FocusUI } from "./focus";
+import { mountCoach, type Coach } from "./coach";
 import { TimingQte } from "../game/timingQte";
 import { storagePersisted } from "../store/SafeStore";
 import { createAudioManager, type AudioManager } from "../audio/AudioManager";
@@ -76,8 +77,11 @@ export function boot(root: HTMLElement, adapter: PortalAdapter): void {
 
   adapter.loadingStop();
 
-  // Tutorial-first for new players. Skippable, in-gameplay.
+  // Tutorial-first for new players: the gateway into the game (user
+  // 2026-10-12). In-gameplay, skippable; finishing or skipping it marks it
+  // done, so it is never forced again (replay from the home menu / shop).
   const isNew =
+    !progress.tutorialDone &&
     progress.gold === 0 &&
     progress.bestStreak === 0 &&
     progress.bestBestOf === 0 &&
@@ -99,7 +103,7 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
     <button data-m="deathmatch">DEATHMATCH — STREAK</button>
     <button data-m="map" class="mapbtn"></button>
     <button data-m="shop">SHOP</button>
-    <div class="note">Holster first, then hit Space/Enter (PC) or tap (touch) when the marker swinging round the ring on the foe is on the gold arc, as many times as you can: the ring is your crosshair and shrinks with every hit. Leaving the holster restarts the countdown. DRAW! → aim → fire. Headshot kills instantly.</div>
+    <button data-m="tutorial" class="mapbtn">HOW TO PLAY — TUTORIAL</button>
   </div>`);
   
   // Mute button (top-right)
@@ -262,7 +266,7 @@ function runDuel(
   series?: SeriesState,
   hellRound = false,
   reviveUsed = false,
-  opts: { run?: DeathRun; startHP?: number; distM?: number; map?: MapId; foe?: FoeLookId } = {},
+  opts: { run?: DeathRun; startHP?: number; distM?: number; map?: MapId; foe?: FoeLookId; retry?: boolean } = {},
 ): void {
   const run = opts.run;
   // Map (user 2026-10-12): the series / run carries it; tutorial + single
@@ -538,13 +542,25 @@ function runDuel(
   root.appendChild(zone);
 
   let skip: HTMLElement | null = null;
+  // Tutorial coach (src/ui/coach.ts): step cards beside the holster zone,
+  // rule cards after the kill. SKIP stays up the whole way.
+  let coach: Coach | null = null;
   if (mode === "tutorial") {
-    skip = el(`<div class="skip"><button>SKIP ▸</button></div>`);
+    skip = el(`<div class="skip"><button>SKIP<span class="wide"> TUTORIAL</span> ▸</button></div>`);
     root.appendChild(skip);
     skip.querySelector("button")!.addEventListener("click", () => {
+      markTutorialDone();
       cleanup();
       showHome(root, adapter, audio);
     });
+    coach = mountCoach(root, coarse);
+    coach.step(opts.retry ? "retry" : "holster");
+  }
+  function markTutorialDone(): void {
+    const prog = adapter.loadProgress();
+    if (prog.tutorialDone) return;
+    prog.tutorialDone = true;
+    adapter.saveProgress(prog);
   }
 
   const machine = new DuelMachine({
@@ -1151,6 +1167,7 @@ function runDuel(
     const y = clamp(hip.y, s / 2 + 8, window.innerHeight - s / 2 - 8);
     zone.style.left = `${x - s / 2}px`;
     zone.style.top = `${y - s / 2}px`;
+    coach?.place(zone.getBoundingClientRect());
   }
   updateZone();
 
@@ -1221,6 +1238,7 @@ function runDuel(
     cross.style.display = "block";
     cross.classList.add("focusing");
     adapter.gameplayStart();
+    coach?.step("focus");
   }
 
   function inZone(cx: number, cy: number): boolean {
@@ -1326,6 +1344,7 @@ function runDuel(
     void audio.playSFX("hit-body").catch(() => undefined);
     cue.textContent = `HIT −${dmg.toFixed(0)}`;
     sub.textContent = foeHP > 0 && ammo > 0 ? "Again — aim + fire!" : sub.textContent;
+    coach?.step("hit");
   }
 
   function hitPlayer(head: boolean, dmg: number, point?: THREE.Vector3, dir?: THREE.Vector3): void {
@@ -1478,6 +1497,8 @@ function runDuel(
 
   function endRound(text: string, subText: string, result: "p" | "f" | "draw", toHell = false): void {
     adapter.gameplayStop();
+    coach?.hide();
+    if (mode === "tutorial" && result === "p") markTutorialDone();
     // Round over: hand back the OS cursor. The crosshair freezes once the
     // round resolves, and `in-duel` hides the cursor with !important, so the
     // revive overlay (token / buy / ad / stay down) had no pointer at all.
@@ -1580,10 +1601,16 @@ function runDuel(
         runDuel(root, adapter, mode, audio, series, false, reviveUsed);
         return;
       }
+      if (coach && result === "p") {
+        // Tutorial won: the rule cards over the finished round, then home
+        // (the scene keeps rendering behind them until PLAY / SKIP).
+        coach.rules(() => { cleanup(); showHome(root, adapter, audio); });
+        return;
+      }
       cleanup();
       if (result === "p") showHome(root, adapter, audio);
       else if (result === "f") showHome(root, adapter, audio);
-      else runDuel(root, adapter, mode, audio, undefined, false, reviveUsed);
+      else runDuel(root, adapter, mode, audio, undefined, false, reviveUsed, { retry: mode === "tutorial" });
     }, 1500);
   }
 
@@ -1710,6 +1737,7 @@ function runDuel(
     ammo -= 1;
     audio.playGunshotSynth(0.85);
     paintBars();
+    coach?.step("shot", ammo);
 
     const muzzle = player.gunTip.getWorldPosition(new THREE.Vector3());
     muzzle.y = Math.max(muzzle.y, 0.12); // prone muzzle can sit at the dirt line
@@ -1979,8 +2007,10 @@ function runDuel(
     if (!rec) return;
     const quick = performance.now() - rec.t < 350;
     const still = Math.hypot(e.clientX - rec.x, e.clientY - rec.y) < 16;
-    if (quick && !still && (machine.phase === "draw" || machine.phase === "fire")) {
-      // tap (no drag): fire where it landed.
+    if (quick && still && (machine.phase === "draw" || machine.phase === "fire")) {
+      // tap (no drag): fire where it landed. (Was `!still`: only a quick
+      // flick fired and a plain tap never did, against the locked 09-26
+      // "drag aims, quick-tap fires".)
       aimFromClient(e.clientX, e.clientY);
       attemptFire(e.clientX, e.clientY);
     }
@@ -2006,6 +2036,7 @@ function runDuel(
     root.removeEventListener("pointerup", onPointerUp);
     root.removeEventListener("pointercancel", onPointerUp);
     focusUI.destroy();
+    coach?.destroy();
     ambientFx.dispose();
     playerShadow.dispose();
     foeShadow.dispose();
@@ -2280,6 +2311,7 @@ function runDuel(
       tracking = true;
       cue.textContent = hellRound ? "DRAW! — FIRST HIT WINS" : "DRAW!";
       popCue();
+      coach?.step("draw");
       sub.textContent = coarse ? "Drag to aim · tap to fire!" : "Aim with mouse · click to fire!";
       focusUI.setVisible(false);
       zone.style.display = "none";

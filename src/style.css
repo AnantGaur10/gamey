@@ -271,3 +271,60 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
    an absolute box at left:50% only gets half the width to shrink into). */
 .roundline { white-space: nowrap; }
 @media (max-width: 900px) { .roundline { font-size: 11px !important; letter-spacing: .06em !important; } }
+/* Tutorial coach (src/ui/coach.ts): live step card beside the holster zone
+   (arrow points at it), never takes pointer events; rule cards after the
+   kill. Fixed px like the rest of the HUD. */
+.coach {
+  position: absolute; left: 0; bottom: 8px; z-index: 6; pointer-events: none;
+  background: rgba(28, 16, 6, 0.86); border: 2px solid rgba(212, 175, 55, 0.9); border-radius: 12px;
+  padding: 9px 14px 10px; color: #ffe9bd; font-size: 14px; line-height: 1.4;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55); text-shadow: 0 1px 2px #000;
+  opacity: 0; transform: translateY(6px); transition: opacity 0.2s, transform 0.2s;
+}
+.coach.on { opacity: 1; transform: none; }
+.coach.in { animation: coachin 0.3s ease-out; }
+@keyframes coachin { 0% { opacity: 0; transform: translateX(-10px); } 100% { opacity: 1; transform: none; } }
+.coach::before {
+  content: ""; position: absolute; left: -12px; bottom: var(--ay, 30px);
+  border: 9px solid transparent; border-right: 12px solid rgba(212, 175, 55, 0.95); border-left: 0;
+}
+.coach .ct { font-family: "Rye", Georgia, serif; font-size: 17px; letter-spacing: 0.06em; color: #ffd678; margin-bottom: 3px; }
+.coach b.gold { color: #ffd04a; }
+.coach em { display: block; font-style: normal; color: #ffb08a; margin-bottom: 3px; }
+.coach kbd, .rules kbd {
+  display: inline-block; padding: 0 6px; margin: 0 1px; border: 1px solid #ffe9bd; border-bottom-width: 3px; border-radius: 5px;
+  font: 700 12px/1.45 system-ui, sans-serif; background: rgba(255, 233, 189, 0.12); color: #fff7e8;
+}
+.coach .ico { width: 14px; height: 18px; vertical-align: -4px; color: #ffd678; }
+.rules {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -44%); z-index: 8;
+  width: min(540px, calc(100vw - 32px)); max-height: calc(100vh - 120px); overflow: auto; box-sizing: border-box;
+  background: rgba(28, 16, 6, 0.93); border: 2px solid #d4af37; border-radius: 14px; padding: 14px 20px 12px;
+  color: #ffe9bd; text-align: center; text-shadow: 0 1px 2px #000; pointer-events: auto; cursor: default;
+  box-shadow: 0 6px 26px rgba(0, 0, 0, 0.7);
+}
+.rules .rk { font-size: 11px; font-weight: 800; letter-spacing: 0.22em; opacity: 0.75; }
+.rules .rt { font-family: "Rye", Georgia, serif; font-size: 26px; color: #ffd678; margin: 2px 0 8px; }
+.rules .rb { font-size: 15px; line-height: 1.5; min-height: 4.5em; }
+.rules .rb b { color: #ffd678; }
+.rules .rdots { margin-top: 10px; }
+.rules .rdots i { display: inline-block; width: 7px; height: 7px; margin: 0 3px; border-radius: 50%; background: rgba(255, 233, 189, 0.3); }
+.rules .rdots i.on { background: #ffd678; }
+.rules .rnav { display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; }
+.rules button {
+  min-width: 128px; padding: 9px 16px; font-size: 15px; font-weight: 800; letter-spacing: 0.06em; border-radius: 10px;
+  border: 2px solid #d4af37; background: linear-gradient(180deg, #4a3010, #241407); color: #ffe9bd; cursor: pointer;
+}
+.rules button.go { background: linear-gradient(180deg, #7a5210, #4a2c10); border-color: #ffe9bd; }
+.rules button:hover { filter: brightness(1.18); }
+.rules .rhint { margin-top: 8px; font-size: 11px; opacity: 0.75; }
+@media (max-width: 900px) {
+  .coach { font-size: 12px; line-height: 1.32; padding: 7px 10px 8px; }
+  .coach .ct { font-size: 14px; }
+  .coach kbd, .rules kbd { font-size: 11px; }
+  .rules { padding: 10px 14px; }
+  .rules .rt { font-size: 20px; margin-bottom: 5px; }
+  .rules .rb { font-size: 13px; line-height: 1.42; }
+  .rules button { min-width: 110px; padding: 8px 12px; font-size: 14px; }
+}
+@media (max-width: 900px) { .skip .wide { display: none; } }
