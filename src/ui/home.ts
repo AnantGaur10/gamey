@@ -1,9 +1,12 @@
 import * as THREE from "three";
-import { createArena, stagePositions, faceToward, timeOfDayForRound, cssSkyForRound, createShadowDecal, HELL, type ShadowDecal } from "../render/arena";
+import { createArena, stagePositions, faceToward, cssSkyForRound, createShadowDecal, type ShadowDecal } from "../render/arena";
 import { createSway, type Sway } from "../render/sway";
 import { createCowboy, type Cowboy } from "../render/cowboy";
 import { loadCowboyGlb, swapCowboy, type CowboyGlb } from "../render/cowboyGlb";
 import { loadStreetGlb, type StreetSet } from "../render/streetGlb";
+import { loadMapSet, preloadSet, type MapSet } from "../render/setGlb";
+import { MAPS, MAP_CHOICES, pickMap, mapLabel, isMapChoice, cssSky, type MapId, type MapChoice } from "../render/maps";
+import { foeLookFor, FOE_LOOKS, type FoeLookId } from "../render/foes";
 import { createGunsmoke } from "../render/smoke";
 import { createAmbient } from "../render/ambient";
 import { createFixedStepper, STEP, MAX_FRAME_DT } from "../game/fixedStep";
@@ -94,6 +97,7 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
     <h1>HIGH NOON DUEL</h1>
     <button class="primary" data-m="standard">STANDARD — BEST OF ${BEST_OF}</button>
     <button data-m="deathmatch">DEATHMATCH — STREAK</button>
+    <button data-m="map" class="mapbtn"></button>
     <button data-m="shop">SHOP</button>
     <div class="note">Holster first, then hit Space/Enter (PC) or tap (touch) when the marker swinging round the ring on the foe is on the gold arc, as many times as you can: the ring is your crosshair and shrinks with every hit. Leaving the holster restarts the countdown. DRAW! → aim → fire. Headshot kills instantly.</div>
   </div>`);
@@ -112,10 +116,23 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
   root.appendChild(muteBtn);
   
   root.appendChild(menu);
+  // MAP picker (user 2026-10-12): cycles Random / each map, saved with the
+  // progress; a series or run rolls "Random" once at its start.
+  const mapBtn = menu.querySelector<HTMLButtonElement>("[data-m=map]")!;
+  const savedMap = adapter.loadProgress().settings.map;
+  let mapChoice: MapChoice = isMapChoice(savedMap) ? savedMap : "random";
+  const paintMap = () => { mapBtn.textContent = `MAP: ${mapLabel(mapChoice)} ▸`; };
+  paintMap();
   menu.querySelectorAll("button").forEach((b) => {
     b.addEventListener("click", () => {
-      const m = (b as HTMLElement).dataset.m as Mode | "shop";
-      if (m === "shop") showShop(root, adapter, audio);
+      const m = (b as HTMLElement).dataset.m as Mode | "shop" | "map";
+      if (m === "map") {
+        mapChoice = MAP_CHOICES[(MAP_CHOICES.indexOf(mapChoice) + 1) % MAP_CHOICES.length];
+        const progress = adapter.loadProgress();
+        progress.settings.map = mapChoice;
+        adapter.saveProgress(progress);
+        paintMap();
+      } else if (m === "shop") showShop(root, adapter, audio);
       else if (m === "standard") runSeries(root, adapter, m, audio);
       else if (m === "deathmatch") runDeathmatch(root, adapter, audio);
       else runDuel(root, adapter, m, audio);
@@ -197,11 +214,23 @@ export interface SeriesState {
   roundIndex: number;
   pWins: number;
   fWins: number;
+  /** The whole series plays on one map (picked at the start). */
+  map?: MapId;
 }
 
 /** Standard Best-of loop entry: full-HP resets, most-rounds-wins. */
 function runSeries(root: HTMLElement, adapter: PortalAdapter, mode: Mode, audio: AudioManager): void {
-  runDuel(root, adapter, mode, audio, { roundIndex: 0, pWins: 0, fWins: 0 });
+  runDuel(root, adapter, mode, audio, { roundIndex: 0, pWins: 0, fWins: 0, map: rollMap(adapter) });
+}
+
+/** Saved MAP choice -> a concrete map ("random" rolls), with its set GLB
+    fetched right away so the first duel swaps it in fast. */
+function rollMap(adapter: PortalAdapter): MapId {
+  const choice = adapter.loadProgress().settings.map;
+  const id = pickMap(isMapChoice(choice) ? choice : "random");
+  const glb = MAPS[id].glb;
+  if (glb) preloadSet(`${import.meta.env.BASE_URL}models/${glb}`);
+  return id;
 }
 
 /** Deathmatch run (locked 2026-09-24 §7): endless loops of 3 duels vs the
@@ -212,12 +241,14 @@ export interface DeathRun {
   streak: number;
   /** Player HP carried into the next duel. */
   hp: number;
+  /** This duel's map (a hell round after a double KO stays on it). */
+  map?: MapId;
 }
 
 const DEATHMATCH_WIN_HEAL = 0.1 * BASE_HP;
 
 function runDeathmatch(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager): void {
-  runDuel(root, adapter, "deathmatch", audio, undefined, false, false, { run: { streak: 0, hp: BASE_HP } });
+  runDuel(root, adapter, "deathmatch", audio, undefined, false, false, { run: { streak: 0, hp: BASE_HP, map: rollMap(adapter) } });
 }
 
 // Slice: Ready (holster gate) -> Focus(3s) -> DRAW! -> projectile duel vs AI.
@@ -231,9 +262,13 @@ function runDuel(
   series?: SeriesState,
   hellRound = false,
   reviveUsed = false,
-  opts: { run?: DeathRun; startHP?: number; distM?: number } = {},
+  opts: { run?: DeathRun; startHP?: number; distM?: number; map?: MapId; foe?: FoeLookId } = {},
 ): void {
   const run = opts.run;
+  // Map (user 2026-10-12): the series / run carries it; tutorial + single
+  // duels stay on Main Street. DEV probes can force one.
+  const mapId: MapId = opts.map ?? series?.map ?? run?.map ?? "street";
+  const mapDef = MAPS[mapId];
   audio.stopMusic();
   audio.playMusic('duel');
   root.innerHTML = "";
@@ -250,14 +285,18 @@ function runDuel(
   const stageIdx = series ? series.pWins + series.fWins : rIdx;
   const level = run ? Math.floor(run.streak / AI_ROSTER.length) : 0;
   // Wind picks up as the day goes (noon breeze -> night gusts; hell roars).
-  audio.startWind(hellRound ? 0.8 : [0.45, 0.65, 0.85][Math.min(stageIdx, 2)], hellRound);
+  audio.startWind((hellRound ? 0.8 : [0.45, 0.65, 0.85][Math.min(stageIdx, 2)]) * mapDef.wind, hellRound);
 
-  const { scene, camera, renderer, render, disposePost, worldPerPxAt, fitCamera, setTimeOfDay, noteFrame, setProneFrame } = createArena(distM);
-  // Time-of-day driver: R1 noon → R2 evening → R3+ night. Hell overrides.
-  setTimeOfDay(hellRound ? HELL : timeOfDayForRound(stageIdx));
-  document.body.style.background = hellRound
+  const { scene, camera, renderer, render, disposePost, worldPerPxAt, fitCamera, setTimeOfDay, noteFrame, setProneFrame, setFloor } = createArena(distM);
+  // Time-of-day driver: R1 noon → R2 evening → R3+ night, coloured per map.
+  // Hell: Main Street drops into its lava causeway (render/hell.ts); every
+  // other map stays put and turns red / dark brown (setGlb hell tint).
+  const streetHell = hellRound && mapId === "street";
+  if (mapDef.glb) setFloor(mapDef.floor); // Main Street keeps the arena floor as is
+  setTimeOfDay(mapDef.tod(stageIdx, hellRound));
+  document.body.style.background = streetHell
     ? "linear-gradient(#0d0202 0%, #3a0a06 60%, #ff3a12 100%)"
-    : cssSkyForRound(stageIdx);
+    : mapId === "street" ? cssSkyForRound(stageIdx) : cssSky(mapDef.tod(stageIdx, hellRound));
   root.appendChild(renderer.domElement);
   // Lens vignette (CSS, plain alpha): darker variant for night + hell.
   const vignette = el(`<div class="vignette"></div>`);
@@ -269,7 +308,7 @@ function runDuel(
   // fired at least once, and single-duel hell is impossible (needs a double
   // KO first), so the load always lands post-GameplayStart in practice.
   let hellSet: { tick(t: number): void; dispose(): void } | null = null;
-  if (hellRound) {
+  if (streetHell) {
     void import("../render/hell").then((m) => {
       if (!alive) return;
       try {
@@ -285,7 +324,7 @@ function runDuel(
   gunsmoke.setAmbient(spriteLight(stageIdx, hellRound));
   // Air particles: dust motes / fireflies / embers by time of day.
   const ambientFx = createAmbient(scene, distM);
-  ambientFx.setTimeOfDay(stageIdx, hellRound);
+  ambientFx.setTimeOfDay(Math.min(stageIdx, mapDef.ambientMaxStage), hellRound);
 
   // True projectiles (Slice 1): pooled sim + visible bullet meshes. Net seam:
   // every shot emits Fire{pos,dir,gunId,tick} / Hit{tick,head,damage} over
@@ -349,14 +388,17 @@ function runDuel(
   let player: Cowboy = createCowboy({ coat: 0x4a6fa5, hat: 0x3a2a1a, skin: 0xd9a066, facing: 1 });
   player.group.position.copy(stage.player);
   faceToward(player.group, stage.player, stage.foe);
-  let foe: Cowboy = createCowboy({ coat: 0x8a3b2e, hat: 0x1a1a1a, skin: 0xc98d5f, facing: -1, accent: 0x1a1a1a, moustache: true });
+  // Foe look (user 2026-10-12): a new outfit per decided round in a series
+  // (the AI tier follows the same stage), cycling in deathmatch.
+  const foeLook = opts.foe ? FOE_LOOKS[opts.foe] : foeLookFor(mode === "deathmatch" ? "deathmatch" : mode === "tutorial" ? "tutorial" : "standard", stageIdx, run?.streak ?? 0);
+  let foe: Cowboy = createCowboy({ ...foeLook.fallback, facing: -1 });
   foe.group.position.copy(stage.foe);
   faceToward(foe.group, stage.foe, stage.player);
   player.holster?.();
   foe.holster?.();
   scene.add(player.group, foe.group);
   // Sun shadow decals (cheap stand-in for a shadow map; see arena.ts).
-  const shadowStrength = (i: number, hell: boolean) => (hell ? 0.4 : [0.62, 0.66, 0.3][Math.min(i, 2)]);
+  const shadowStrength = (i: number, hell: boolean) => (hell ? 0.4 : [0.62, 0.66, 0.3][Math.min(i, 2)]) * mapDef.shadow;
   const playerShadow = createShadowDecal(scene);
   const foeShadow = createShadowDecal(scene);
   for (const d of [playerShadow, foeShadow]) d.setStrength(shadowStrength(stageIdx, hellRound));
@@ -397,7 +439,7 @@ function runDuel(
       playerDoll = createRagdoll(scene, player.parts, gun.id);
     }
   });
-  void loadCowboyGlb(`${base}models/cowboy_outlaw.glb`, "O").then((m) => {
+  void loadCowboyGlb(`${base}models/${foeLook.glb}`, "O").then((m) => {
     if (m && alive) {
       foe = swapCowboy(scene, foe, m);
       foeSway = createSway(m.sway);
@@ -415,7 +457,7 @@ function runDuel(
   // Its ambient life (signs, horse, tumbleweed) is posed from wall time in
   // frame(); windows/lanterns glow by time of day (noon dark -> night lit).
   let street: StreetSet | null = null;
-  if (!hellRound) void loadStreetGlb(`${base}models/street.glb`, distM).then((s) => {
+  if (mapId === "street" && !hellRound) void loadStreetGlb(`${base}models/street.glb`, distM).then((s) => {
     if (!s || !alive) return;
     for (const n of ["ProceduralStreet", "ProceduralDressing"]) {
       const old = scene.getObjectByName(n);
@@ -425,6 +467,29 @@ function runDuel(
     scene.add(s.group);
     street = s;
   });
+  // The other maps: the procedural street never shows (the recoloured arena
+  // floor + sky hold until the set lands, ~instant once cached).
+  let mapSet: MapSet | null = null;
+  function lookMapSet(s: MapSet, stage: number, hell: boolean): void {
+    const k = Math.min(stage, 2);
+    s.setHell(hell);
+    s.setGlow(hell ? 1 : mapDef.glow[k]);
+    s.setWindow(mapDef.window[hell ? 3 : k]);
+    s.setShaft(mapDef.shaft[hell ? 3 : k]);
+  }
+  if (mapDef.glb) {
+    for (const n of ["ProceduralStreet", "ProceduralDressing"]) {
+      const old = scene.getObjectByName(n);
+      if (old) old.visible = false;
+    }
+    void loadMapSet(`${base}models/${mapDef.glb}`, distM, mapDef.paintGain).then((s) => {
+      if (!s) return;
+      if (!alive) { s.dispose(); return; }
+      lookMapSet(s, stageIdx, hellRound);
+      scene.add(s.group);
+      mapSet = s;
+    });
+  }
   const playerYaw = player.group.rotation.y;
 
   const hud = el(`<div class="hud">
@@ -440,10 +505,11 @@ function runDuel(
   function paintRound(): void {
     // The round's distance shows on every line: it varies 6-25m (user 2026-10-05).
     const dist = `${Math.round(distM)} M`;
-    if (hellRound) { roundLine.textContent = `HELL SUDDEN-DEATH — FIRST HIT WINS · ${dist}`; return; }
-    if (series) { roundLine.textContent = `ROUND ${series.roundIndex + 1} · YOU ${series.pWins} – ${series.fWins} FOE (1ST TO ${FIRST_TO}) · ${dist}`; return; }
-    if (run) { roundLine.textContent = `DEATHMATCH · STREAK ${run.streak} · DUEL ${rIdx + 1}/${AI_ROSTER.length} · LOOP ${level + 1} · ${dist}`; return; }
-    roundLine.textContent = dist;
+    const where = mapId === "street" ? dist : `${mapDef.name} · ${dist}`;
+    if (hellRound) { roundLine.textContent = `HELL SUDDEN-DEATH — FIRST HIT WINS · ${where}`; return; }
+    if (series) { roundLine.textContent = `ROUND ${series.roundIndex + 1} · YOU ${series.pWins} – ${series.fWins} FOE (1ST TO ${FIRST_TO}) · ${where}`; return; }
+    if (run) { roundLine.textContent = `DEATHMATCH · STREAK ${run.streak} · DUEL ${rIdx + 1}/${AI_ROSTER.length} · LOOP ${level + 1} · ${where}`; return; }
+    roundLine.textContent = where;
   }
   paintRound();
   
@@ -717,7 +783,13 @@ function runDuel(
       /** Jump straight into a hell sudden-death round (repro/tests). */
       hell: (d?: number) => { cleanup(); runDuel(root, adapter, mode, audio, series, true, reviveUsed, { run, distM: d }); },
       /** Jump to best-of round i (0 noon, 1 evening, 2 night) at 1-1. */
-      round: (i: number, d?: number) => { cleanup(); runDuel(root, adapter, "standard", audio, { roundIndex: i, pWins: Math.min(Math.ceil(i / 2), 1), fWins: Math.min(Math.floor(i / 2), 1) }, false, reviveUsed, { distM: d }); },
+      round: (i: number, d?: number) => { cleanup(); runDuel(root, adapter, "standard", audio, { roundIndex: i, pWins: Math.min(Math.ceil(i / 2), 1), fWins: Math.min(Math.floor(i / 2), 1), map: mapId }, false, reviveUsed, { distM: d }); },
+      /** Jump to a map at round i (hell = its hell round), optional distance. */
+      map: (id: MapId, i = 0, hell = false, d?: number) => { cleanup(); runDuel(root, adapter, "standard", audio, { roundIndex: i, pWins: Math.min(Math.ceil(i / 2), 1), fWins: Math.min(Math.floor(i / 2), 1), map: id }, hell, reviveUsed, { distM: d }); },
+      /** Passive tutorial dummy in a given outfit (ragdoll checks: FOE=<id> ai:ragdoll). */
+      tutorial: (foe?: FoeLookId, d?: number) => { cleanup(); runDuel(root, adapter, "tutorial", audio, undefined, false, false, { foe, distM: d, map: mapId }); },
+      /** Current map + foe outfit. */
+      where: () => ({ map: mapId, foe: foeLook.id, set: !!mapSet || !!street }),
       state: () => ({ phase: machine.phase, roundOver, playerHP, foeHP, ammo, foeAmmo, hell: hellRound, live: sim.bullets.filter((b) => b.alive).length, night: nightBlind, fog: (scene.fog as THREE.FogExp2).density, distM }),
       /** Revolver state + world position (quick-draw checks). */
       gun: (side: "player" | "foe") => {
@@ -766,13 +838,14 @@ function runDuel(
       /** Look-dev: force round i's time of day + street glow; hell=true
           also drops the hell set in (street captures, not gameplay). */
       tod: (i: number, hell = false) => {
-        setTimeOfDay(hell ? HELL : timeOfDayForRound(i));
+        setTimeOfDay(mapDef.tod(i, hell));
         gunsmoke.setAmbient(spriteLight(i, hell));
-        ambientFx.setTimeOfDay(i, hell);
+        ambientFx.setTimeOfDay(Math.min(i, mapDef.ambientMaxStage), hell);
+        if (mapSet) lookMapSet(mapSet, i, hell);
         vignette.classList.toggle("dark", hell || i >= 2);
         for (const d of [playerShadow, foeShadow]) d.setStrength(shadowStrength(i, hell));
         street?.setGlow(hell ? 1 : [0, 0.55, 1][Math.min(i, 2)]);
-        if (hell && !hellSet) void import("../render/hell").then((m) => { hellSet = m.enterHell(scene, stage.player, stage.foe, `${import.meta.env.BASE_URL}models/hell.glb`); });
+        if (hell && !hellSet && mapId === "street") void import("../render/hell").then((m) => { hellSet = m.enterHell(scene, stage.player, stage.foe, `${import.meta.env.BASE_URL}models/hell.glb`); });
       },
       /** Joint + group rotation readout (pose debug). */
       joints: (side: "player" | "foe") => {
@@ -1525,6 +1598,7 @@ function runDuel(
     } else {
       r.hp = Math.max(1, playerHP);
     }
+    r.map = rollMap(adapter);
     runDuel(root, adapter, mode, audio, undefined, false, reviveUsed, { run: r });
   }
 
@@ -1734,7 +1808,7 @@ function runDuel(
         gunsmoke.dust(impactAt, dir, "ground");
       } else if (b.shooter === "player" && b.pos[1] < 7 && impactAt.clone().sub(stage.foe).dot(duelAxis) > 8) {
         v.spent = true;
-        gunsmoke.dust(impactAt, dir, "wood");
+        gunsmoke.dust(impactAt, dir, mapDef.backdrop);
       }
     }
   }
@@ -1920,6 +1994,7 @@ function runDuel(
     document.body.style.background = "";
     for (const t of foeTimers) window.clearTimeout(t);
     try { hellSet?.dispose(); } catch { /* noop */ }
+    try { mapSet?.dispose(); } catch { /* noop */ }
     try { if (playerDoll) playerDoll.dispose(); } catch { /* noop */ }
     try { if (foeDoll) foeDoll.dispose(); } catch { /* noop */ }
     window.removeEventListener("mousemove", onMouseMove);
@@ -2277,6 +2352,7 @@ function runDuel(
     }
     const nowSec = performance.now() / 1000;
     street?.tick(nowSec);
+    mapSet?.tick(nowSec);
     hellSet?.tick(nowSec);
     ambientFx.tick(nowSec, renderer.getPixelRatio());
     playerSway?.render(alpha);

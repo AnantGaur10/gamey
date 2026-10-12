@@ -265,3 +265,9 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
   .menu h1 { font-size: 34px; }
   .menu button { min-width: 240px; font-size: 16px; }
 }
+/* Home MAP picker (cycles on click): quieter than the mode buttons. */
+.menu button.mapbtn { font-size: 15px; letter-spacing: .08em; opacity: .92; }
+/* Round line: one line at every QA size (the map name made it wrap at 800px:
+   an absolute box at left:50% only gets half the width to shrink into). */
+.roundline { white-space: nowrap; }
+@media (max-width: 900px) { .roundline { font-size: 11px !important; letter-spacing: .06em !important; } }

@@ -21,6 +21,9 @@ export interface TimeOfDay {
   grade: Grade;
   /** Cowboy rim light (addRimLight). */
   rim: { color: number; strength: number };
+  /** Hemisphere light colours (sky / ground bounce); default warm desert. */
+  hemiSky?: number;
+  hemiGround?: number;
 }
 
 export const NOON: TimeOfDay = {
@@ -67,6 +70,14 @@ export const NIGHT: TimeOfDay = {
   grade: { exposure: 1.4, saturation: 0.85, contrast: 1.04, lift: [0, 0, 0], gain: [0.9, 0.95, 1.1] },
   rim: { color: 0x8aa8ff, strength: 0.1 },
 };
+
+/** How a map set wants the arena floor: ground colour (null = hidden, the
+    set has its own floor everywhere the camera looks), wagon ruts, sun disc. */
+export interface ArenaFloorLook {
+  ground: number | null;
+  ruts: boolean;
+  sun: boolean;
+}
 
 // Hell sudden death (render/hell.ts builds the set): lava light comes from
 // the set's own up-light; the arena sun is a dim ember.
@@ -398,6 +409,8 @@ export function createArena(distM: number): {
   noteFrame(dt: number): void;
   /** 0 = normal framing, 1 = player-prone framing (blend in between). */
   setProneFrame(k: number): void;
+  /** Map sets (render/maps.ts): repaint/hide the arena floor under them. */
+  setFloor(f: ArenaFloorLook): void;
 } {
   const scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2(NOON.fogColor, NOON.fogDensity);
@@ -460,6 +473,7 @@ export function createArena(distM: number): {
   addDirtDetail(groundMat, duelDir, 1);
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(600, 400), groundMat);
   ground.rotation.x = -Math.PI / 2;
+  ground.name = "ArenaGround";
   // Street floor (ground, ruts, sun, markers) is one group so the hell set
   // can hide it whole: hell shares nothing with the street.
   const floor = new THREE.Group();
@@ -470,6 +484,9 @@ export function createArena(distM: number): {
   // Long enough to run under the camera: the bottom rows see the ground
   // ~12m behind it (negative near plane above).
   const rutMat = new THREE.MeshLambertMaterial({ color: 0xb08c5a });
+  const ruts = new THREE.Group();
+  ruts.name = "ArenaRuts";
+  floor.add(ruts);
   const rutMid = pPos.clone().lerp(fPos, 0.5).addScaledVector(duelDir, -10);
   const rutPerp = new THREE.Vector3(-duelDir.z, 0, duelDir.x);
   const rutYaw = Math.atan2(duelDir.x, duelDir.z);
@@ -478,7 +495,7 @@ export function createArena(distM: number): {
     rut.position.copy(rutMid).addScaledVector(rutPerp, s);
     rut.position.y = 0.012;
     rut.rotation.y = rutYaw;
-    floor.add(rut);
+    ruts.add(rut);
   }
 
   // Sun disc (photo's pale sun), fixed to face the static camera.
@@ -488,6 +505,7 @@ export function createArena(distM: number): {
   );
   sun.position.copy(pPos).addScaledVector(duelDir, 22).add(new THREE.Vector3(0, 10, 0));
   sun.lookAt(camera.position);
+  sun.name = "ArenaSun";
   floor.add(sun);
 
   // Duel markers at the staged feet: a faint scuffed circle (the sun
@@ -805,6 +823,8 @@ export function createArena(distM: number): {
     (scene.fog as THREE.FogExp2).color.setHex(t.fogColor);
     (scene.fog as THREE.FogExp2).density = t.fogDensity;
     hemi.intensity = t.hemiIntensity;
+    hemi.color.setHex(t.hemiSky ?? 0xfff2dd);
+    hemi.groundColor.setHex(t.hemiGround ?? 0x8a6f4d);
     dir.intensity = t.dirIntensity;
     dir.color.setHex(t.dirColor);
     // Night floor: never pitch black (~15% enemy ambient + rim). Lantern
@@ -889,6 +909,18 @@ export function createArena(distM: number): {
     camera.lookAt(_look);
   }
 
+  function setFloor(f: ArenaFloorLook): void {
+    if (f.ground === null) ground.visible = false;
+    else {
+      ground.visible = true;
+      groundMat.color.setHex(f.ground);
+      // A set's own ground band sits at y 0..0.004: drop the plane under it.
+      ground.position.y = -0.02;
+    }
+    ruts.visible = f.ruts;
+    sun.visible = f.sun;
+  }
+
   function render(): void {
     renderer.info.reset();
     if (post) post.render(scene, camera);
@@ -906,5 +938,6 @@ export function createArena(distM: number): {
     fitCamera,
     noteFrame,
     setProneFrame,
+    setFloor,
   };
 }

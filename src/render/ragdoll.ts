@@ -64,6 +64,15 @@ const DEFS: Array<[keyof RagdollParts, number]> = [
 const BODY_MESH_FILTER: Partial<Record<keyof RagdollParts, RegExp>> = {
   forearmR: /fore|hand/i,
 };
+// Clothing that never sizes a body (user 2026-10-12 outfits): a top hat or a
+// sombrero made the head box a 0.9m pole / 1.1m disc and long coat tails
+// stretched the torso box, so corpses came to rest propped half-upright.
+// The hat and tails still ride their part (bindAccessories); only the
+// collision boxes ignore them (subtrees skipped by node name, incl. pivots).
+const BODY_MESH_SKIP: Partial<Record<keyof RagdollParts, RegExp>> = {
+  head: /_Hat/,
+  torso: /CoatTail/,
+};
 
 /** ConeTwist whose twist reference is fixed at creation. Stock cannon-es
     derives each body's twist reference from its LOCAL cone axis
@@ -152,6 +161,7 @@ function ownBox(
   obj: THREE.Object3D,
   all: Set<THREE.Object3D>,
   only?: RegExp,
+  skip?: RegExp,
 ): { center: THREE.Vector3; half: THREE.Vector3 } | null {
   obj.updateWorldMatrix(true, true);
   const inv = new THREE.Matrix4().copy(obj.matrixWorld).invert();
@@ -162,6 +172,7 @@ function ownBox(
   const visit = (o: THREE.Object3D): void => {
     if (o !== obj && all.has(o)) return;
     if (!o.visible) return;
+    if (o !== obj && skip && skip.test(o.name)) return;
     const m = o as THREE.Mesh;
     if (m.isMesh && m.geometry && (!only || only.test(o.name))) {
       if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
@@ -280,7 +291,8 @@ export function createRagdoll(
       // The gun rides the forearm part, but its barrel/cylinder/frame would make
       // a long heavy box that tears the elbow joint apart on ground contact
       // (forearm drifted 0.6-0.9m from the shoulder): size from forearm+hand.
-      const own = (BODY_MESH_FILTER[key] ? ownBox(obj, partSet, BODY_MESH_FILTER[key]) : null) ?? ownBox(obj, partSet);
+      const own = (BODY_MESH_FILTER[key] ? ownBox(obj, partSet, BODY_MESH_FILTER[key]) : null)
+        ?? ownBox(obj, partSet, undefined, BODY_MESH_SKIP[key]);
       const off = own ? own.center : new THREE.Vector3();
       const hx = Math.max(0.05, own ? own.half.x * 0.75 : 0.1);
       const hy = Math.max(0.05, own ? own.half.y * 0.75 : 0.1);

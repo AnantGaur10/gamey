@@ -321,6 +321,17 @@ def bake_ao(objs, hidden):
         me.color_attributes.active_color = me.color_attributes["Col"]
     for o in hidden: o.hide_render = False
 
+# --- enemy outfits (user 2026-10-12) -------------------------------------------
+# GLB_OUTFIT=<name> re-dresses the OUTLAW rig before the merge (outfits.py:
+# palette + extra clothing meshes parented under KEEP nodes, in the standing
+# pose solved above) and exports only it, as cowboy_<name>.glb. Same O_ node
+# names, clips, holster and hit geometry as cowboy_outlaw. Unset = the
+# default build (hero + outlaw), byte-identical to before.
+OUTFIT = os.environ.get("GLB_OUTFIT")
+if OUTFIT:
+    import outfits
+    outfits.apply(OUTFIT, "O_", bpy.data.collections["Outlaw"])
+
 mat = glb_util.material("M_Cowboy")
 # Contact AO under the boots: a ground plane at the feet (z=0 in the .blend).
 gme = bpy.data.meshes.new("BakeGround")
@@ -386,7 +397,8 @@ bpy.data.objects.remove(ground, do_unlink=True)
 # --- export (NLA stays muted; this process never saves the .blend) ----------
 OUT = os.environ.get("GLB_OUT") or os.path.normpath(
     os.path.join(os.path.dirname(bpy.data.filepath), "..", "public", "models"))
-for coll, name in (("Hero", "cowboy_hero"), ("Outlaw", "cowboy_outlaw")):
+EXPORTS = (("Outlaw", "cowboy_" + OUTFIT),) if OUTFIT else (("Hero", "cowboy_hero"), ("Outlaw", "cowboy_outlaw"))
+for coll, name in EXPORTS:
     bpy.context.view_layer.active_layer_collection = bpy.context.view_layer.layer_collection.children[coll]
     path = os.path.join(OUT, name + ".glb")
     bpy.ops.export_scene.gltf(filepath=path, export_format="GLB", use_active_collection=True,

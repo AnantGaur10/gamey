@@ -70,6 +70,12 @@ async function burst(page: Page, cast: Cast, side: 'foe' | 'player', tag: string
 
 async function killFoe(page: Page, part: 'mid' | 'head', tag: string, pre?: string) {
   await page.goto('http://localhost:5174/basic.html', { waitUntil: 'networkidle' });
+  // FOE=bandido|ghost|dandy: the passive tutorial dummy wears that outfit.
+  if (process.env.FOE) {
+    await page.waitForFunction(() => !!(window as any).__gamey?.tutorial, null, { timeout: 15000 });
+    await page.evaluate((f) => (window as any).__gamey.tutorial(f), process.env.FOE);
+    await page.waitForTimeout(500);
+  }
   await toDraw(page);
   if (pre) {
     // Wound pose first (probe skips the hit): checks the pose -> ragdoll hand-off has no snap.

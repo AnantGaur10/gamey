@@ -7,7 +7,8 @@ export interface Progress {
   reviveToken: 0 | 1;
   bestStreak: number;
   bestBestOf: number;
-  settings: { mute: boolean; quality: "low" | "high" };
+  /** map: home-screen MAP choice ("random" or a map id, render/maps.ts). */
+  settings: { mute: boolean; quality: "low" | "high"; map?: string };
 }
 
 export function defaultProgress(): Progress {
