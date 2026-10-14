@@ -247,16 +247,16 @@ test.describe('Gamey - Wounds', () => {
       ));
       if (hp <= 0 || php <= 0) break;
       const c = await page.evaluate(() => document.querySelector('.cue')?.textContent ?? '');
-      if (/DOWN|HEADSHOT|VICTORY|DEFEAT|HELL/.test(c)) break;
+      if (/DOWN|HEADSHOT|VICTORY|DEFEAT|SUDDEN DEATH/.test(c)) break;
       const p = await aimBody(page);
       await page.mouse.click(p.x, p.y);
       await page.waitForTimeout(600);
     }
-    // Series auto-advances (Round 2, or hell on a double KO) with fresh state.
+    // Series auto-advances (Round 2, or sudden death on a double KO) with fresh state.
     await page.waitForFunction(
       () => {
         const t = document.querySelector('.roundline')?.textContent ?? '';
-        return t.includes('ROUND 2') || t.includes('HELL');
+        return t.includes('ROUND 2') || t.includes('SUDDEN DEATH');
       },
       { timeout: 30000 },
     );

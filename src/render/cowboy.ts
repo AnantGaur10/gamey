@@ -61,6 +61,53 @@ export interface Cowboy {
 
 export type GunState = "holster" | "drawing" | "hand";
 
+/** Shop gun finishes (user 2026-10-14): lifesteal = red, gold = gold. */
+export const GUN_FINISH: Record<string, number | undefined> = { lifesteal: 0xe0140e, gold: 0xf5b81e };
+
+/** Repaint the revolver's metal for a shop gun; the wooden grip keeps its
+    colour. Works on the GLB gun (palette x AO in COLOR_0: the grey,
+    unsaturated vertices are the metal) and the procedural one (one material
+    per part). Geometry / materials are cloned, never shared GLB data.
+    Null-safe; the default gun (no finish) is left alone. */
+export function paintGun(gun: THREE.Object3D | null | undefined, gunId: string): void {
+  const hex = GUN_FINISH[gunId];
+  if (!gun || hex === undefined) return;
+  const tint = new THREE.Color(hex);
+  const c = new THREE.Color();
+  const isMetal = (col: THREE.Color): boolean => {
+    const mx = Math.max(col.r, col.g, col.b);
+    return mx < 1e-4 || (mx - Math.min(col.r, col.g, col.b)) / mx < 0.3;
+  };
+  // Metal was pre-darkened in the bake: lift it so the finish reads, keep the AO.
+  const finish = (col: THREE.Color): void => {
+    const lum = 0.2126 * col.r + 0.7152 * col.g + 0.0722 * col.b;
+    const k = Math.min(1, 0.75 + 1.5 * lum);
+    col.setRGB(tint.r * k, tint.g * k, tint.b * k);
+  };
+  gun.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const attr = m.geometry.getAttribute("color") as THREE.BufferAttribute | undefined;
+    if (attr) {
+      m.geometry = m.geometry.clone();
+      const ca = m.geometry.getAttribute("color") as THREE.BufferAttribute;
+      for (let i = 0; i < ca.count; i++) {
+        c.setRGB(ca.getX(i), ca.getY(i), ca.getZ(i));
+        if (!isMetal(c)) continue;
+        finish(c);
+        ca.setXYZ(i, c.r, c.g, c.b);
+      }
+      ca.needsUpdate = true;
+    } else {
+      const mat = m.material as THREE.MeshLambertMaterial;
+      if (!mat.color || !isMetal(mat.color)) return;
+      const own = mat.clone();
+      finish(own.color);
+      m.material = own;
+    }
+  });
+}
+
 /** Holster/draw for a rig whose revolver is one node `gun` under `elbow`
  *  (its authored parent = the in-hand rest) and whose `socket` (on the
  *  pelvis) is the gun's transform when holstered. Null-safe: without a gun

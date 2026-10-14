@@ -71,8 +71,8 @@ const RULES: Array<{ t: string; b: string }> = [
     b: `<b>STANDARD</b>: best of 3 rounds, first to 2 wins.<br><b>DEATHMATCH</b>: duel after duel. Your health carries over, a win heals 10%, one loss ends the run.<br>Real outlaws shoot back, and they react faster every round.`,
   },
   {
-    t: "DAMAGE & DISTANCE",
-    b: `<b>Headshot</b>: instant kill.<br><b>Body</b>: full damage up to 9 m, falling to about half beyond 16 m.<br>Every round is fought at 6 to 25 m (shown on the round line). Both out of bullets: higher health wins.`,
+    t: "HEADSHOTS",
+    b: `A <b>headshot</b> always kills.`,
   },
   {
     t: "WOUNDS & RECOIL",
@@ -83,8 +83,8 @@ const RULES: Array<{ t: string; b: string }> = [
     b: `Round 1 is at noon, round 2 in the dusk haze, round 3 at night.<br>At night the outlaw is invisible: only his muzzle flash gives him away.`,
   },
   {
-    t: "HELL",
-    b: `Both go down at the same moment? <b>HELL SUDDEN DEATH</b>: one round, full cylinders, the first hit wins.`,
+    t: "SUDDEN DEATH",
+    b: `Both go down at the same moment? <b>SUDDEN DEATH</b>: one round, full cylinders, the first hit wins.`,
   },
   {
     t: "GOLD & GEAR",

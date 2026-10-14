@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { createArena, stagePositions, faceToward, cssSkyForRound, createShadowDecal, type ShadowDecal } from "../render/arena";
 import { createSway, type Sway } from "../render/sway";
-import { createCowboy, type Cowboy } from "../render/cowboy";
+import { createCowboy, paintGun, type Cowboy } from "../render/cowboy";
 import { loadCowboyGlb, swapCowboy, type CowboyGlb } from "../render/cowboyGlb";
 import { loadStreetGlb, type StreetSet } from "../render/streetGlb";
 import { loadMapSet, preloadSet, type MapSet } from "../render/setGlb";
@@ -139,19 +139,27 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
   });
 }
 
+/** Shop icons (user 2026-10-14): revolvers in their finish (render/cowboy
+    GUN_FINISH: lifesteal red, gold gold), the revive token as a first aid kit. */
+function gunIcon(id: string): string {
+  const metal = { lifesteal: "#c0281f", gold: "#e8b43a" }[id] ?? "#8a8f98";
+  return `<svg class="sicon" viewBox="0 0 48 28" aria-hidden="true"><path d="M4 6h30v6H17l-1 3h-4l-2 9H3l3-12H4z" fill="${metal}" stroke="#1a0f06" stroke-width="1.5" stroke-linejoin="round"/><path d="M34 7h11v4H34z" fill="${metal}" stroke="#1a0f06" stroke-width="1.5"/><circle cx="21" cy="9" r="4.2" fill="${metal}" stroke="#1a0f06" stroke-width="1.5"/><path d="M6 14l-3 10h7l2-9z" fill="#6b3f1c" stroke="#1a0f06" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+}
+const AID_KIT_ICON = `<svg class="sicon" viewBox="0 0 48 36" aria-hidden="true"><path d="M17 8V4h14v4" fill="none" stroke="#1a0f06" stroke-width="5"/><path d="M17 8V4h14v4" fill="none" stroke="#e9e2d2" stroke-width="2.5"/><rect x="3" y="8" width="42" height="26" rx="4" fill="#f2ede3" stroke="#1a0f06" stroke-width="2"/><path d="M20 13h8v6h6v8h-6v6h-8v-6h-6v-8h6z" transform="translate(0 -2)" fill="#d22a20" stroke="#7a120c" stroke-width="1"/></svg>`;
+
 function showShop(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager): void {
   root.innerHTML = "";
   const p = adapter.loadProgress();
   const can = (price: number) => p.gold >= price;
   const shop = el(`<div class="shop">
     <h2>ARMORY</h2>
-    <div>Gold: <b>${p.gold}</b> · Revive token: <b>${p.reviveToken}</b></div>
+    <div>Gold: <b>${p.gold}</b> · ${AID_KIT_ICON} Revive token: <b>${p.reviveToken}</b></div>
     <div>Guns owned: ${p.gunsOwned.join(", ")} · Equipped: ${p.equippedGun}</div>
     <div class="note">${storagePersisted() ? "" : "Won't save in private mode (inline note, never a popup)."}</div>
-    <div class="srow"><button data-b="buy-life">LIFESTEAL GUN — ${SHOP_PRICES.lifesteal}g (heal 20% of dealt, cap 15/hit, weaker 38dmg)</button></div>
-    <div class="srow"><button data-b="buy-gold">GOLD GUN — ${SHOP_PRICES.gold}g (+40% gold, weaker 37dmg)</button></div>
-    <div class="srow"><button data-b="buy-revive">REVIVE TOKEN — ${SHOP_PRICES.revive}g (max 1 held, once per game)</button></div>
-    <div class="srow"><button data-b="equip-default">EQUIP DEFAULT</button> <button data-b="equip-life">EQUIP LIFESTEAL</button> <button data-b="equip-gold">EQUIP GOLD</button></div>
+    <div class="srow"><button data-b="buy-life">${gunIcon("lifesteal")}LIFESTEAL GUN — ${SHOP_PRICES.lifesteal}g (heal 20% of dealt, cap 15/hit, weaker 38dmg)</button></div>
+    <div class="srow"><button data-b="buy-gold">${gunIcon("gold")}GOLD GUN — ${SHOP_PRICES.gold}g (+40% gold, weaker 37dmg)</button></div>
+    <div class="srow"><button data-b="buy-revive">${AID_KIT_ICON}REVIVE TOKEN — ${SHOP_PRICES.revive}g (max 1 held, once per game)</button></div>
+    <div class="srow"><button data-b="equip-default">${gunIcon("default")}EQUIP DEFAULT</button> <button data-b="equip-life">${gunIcon("lifesteal")}EQUIP LIFESTEAL</button> <button data-b="equip-gold">${gunIcon("gold")}EQUIP GOLD</button></div>
     ${adapter.adsEnabled ? `<div class="srow"><button data-b="ad-gold">WATCH AD FOR +10g</button></div>` : ``}
     <div class="smsg"></div>
     <div class="srow"><button data-b="tutorial">REPLAY TUTORIAL</button></div>
@@ -387,6 +395,7 @@ function runDuel(
   let player: Cowboy = createCowboy({ coat: 0x4a6fa5, hat: 0x3a2a1a, skin: 0xd9a066, facing: 1 });
   player.group.position.copy(stage.player);
   faceToward(player.group, stage.player, stage.foe);
+  paintGun(player.gun, gun.id);
   // Foe look (user 2026-10-12): a new outfit per decided round in a series
   // (the AI tier follows the same stage), cycling in deathmatch.
   const foeLook = opts.foe ? FOE_LOOKS[opts.foe] : foeLookFor(mode === "deathmatch" ? "deathmatch" : mode === "tutorial" ? "tutorial" : "standard", stageIdx, run?.streak ?? 0);
@@ -425,6 +434,7 @@ function runDuel(
     if (m && alive) {
       player = swapCowboy(scene, player, m);
       playerSway = createSway(m.sway);
+      paintGun(player.gun, gun.id);
       // Late swap after DRAW: procedural owns the arms, silence idle. Before
       // DRAW the fresh rig's gun goes into its holster (idle = hand on grip).
       if (tracking) (player as unknown as CowboyGlb).stopClips?.();
@@ -506,7 +516,7 @@ function runDuel(
     // The round's distance shows on every line: it varies 6-25m (user 2026-10-05).
     const dist = `${Math.round(distM)} M`;
     const where = mapId === "street" ? dist : `${mapDef.name} · ${dist}`;
-    if (hellRound) { roundLine.textContent = `HELL SUDDEN-DEATH — FIRST HIT WINS · ${where}`; return; }
+    if (hellRound) { roundLine.textContent = `SUDDEN DEATH — FIRST HIT WINS · ${where}`; return; }
     if (series) { roundLine.textContent = `ROUND ${series.roundIndex + 1} · YOU ${series.pWins} – ${series.fWins} FOE (1ST TO ${FIRST_TO}) · ${where}`; return; }
     if (run) { roundLine.textContent = `DEATHMATCH · STREAK ${run.streak} · DUEL ${rIdx + 1}/${AI_ROSTER.length} · LOOP ${level + 1} · ${where}`; return; }
     roundLine.textContent = where;
@@ -792,7 +802,7 @@ function runDuel(
       /** Jump straight into a hell sudden-death round (repro/tests). */
       hell: (d?: number) => { cleanup(); runDuel(root, adapter, mode, audio, series, true, reviveUsed, { run, distM: d }); },
       /** Jump to best-of round i (0 noon, 1 evening, 2 night) at 1-1. */
-      round: (i: number, d?: number) => { cleanup(); runDuel(root, adapter, "standard", audio, { roundIndex: i, pWins: Math.min(Math.ceil(i / 2), 1), fWins: Math.min(Math.floor(i / 2), 1), map: mapId }, false, reviveUsed, { distM: d }); },
+      round: (i: number, d?: number, hp?: number) => { cleanup(); runDuel(root, adapter, "standard", audio, { roundIndex: i, pWins: Math.min(Math.ceil(i / 2), 1), fWins: Math.min(Math.floor(i / 2), 1), map: mapId }, false, reviveUsed, { distM: d, startHP: hp }); },
       /** Jump to a map at round i (hell = its hell round), optional distance. */
       map: (id: MapId, i = 0, hell = false, d?: number) => { cleanup(); runDuel(root, adapter, "standard", audio, { roundIndex: i, pWins: Math.min(Math.ceil(i / 2), 1), fWins: Math.min(Math.floor(i / 2), 1), map: id }, hell, reviveUsed, { distM: d }); },
       /** Passive tutorial dummy in a given outfit (ragdoll checks: FOE=<id> ai:ragdoll). */
@@ -1300,15 +1310,27 @@ function runDuel(
       }
     }
     void audio.playSFX(head ? "hit-head" : "hit-body").catch(() => undefined);
-    if (!head) {
-      const dmg = bodyDamage(gun.baseDamage, distM);
-      if (gun.extra === "lifesteal") {
-        playerHP = Math.min(BASE_HP, playerHP + Math.min(LIFESTEAL_CAP_PER_HIT, dmg * gun.extraValue));
-        paintBars();
-      }
-    }
     killByPlayer = true;
     maybeEnd();
+  }
+
+  /** Lifesteal gun: EVERY landed body hit heals 20% of the damage dealt
+      (cap 15/hit, never above full), with a +N pop on the player's bar. It
+      used to heal on the killing shot only, when the round was already over. */
+  function lifesteal(dealt: number): void {
+    if (gun.extra !== "lifesteal" || playerHP <= 0) return;
+    const heal = Math.min(LIFESTEAL_CAP_PER_HIT, dealt * gun.extraValue, BASE_HP - playerHP);
+    if (heal <= 0) return;
+    playerHP += heal;
+    paintBars();
+    const you = hp.querySelector(".hp.you") as HTMLElement;
+    const pop = el(`<b class="healpop">+${Math.max(1, Math.round(heal))}</b>`);
+    pop.style.left = youFace.style.left;
+    you.appendChild(pop);
+    you.classList.remove("healed");
+    void you.offsetWidth; // restart the glow
+    you.classList.add("healed");
+    window.setTimeout(() => pop.remove(), 1000);
   }
 
   function woundFoe(dmg: number): void {
@@ -1419,7 +1441,7 @@ function runDuel(
       // crossing bullets: the rest are dropped so nothing lands afterwards.
       roundOver = true;
       for (const b of sim.bullets) if (b.alive) sim.kill(b);
-      if (foeDead && playerDead) endRound("BOTH HIT AT ONCE", "Hell takes no winner. Back to the street.", "draw");
+      if (foeDead && playerDead) endRound("BOTH HIT AT ONCE", "Sudden death takes no winner. Back to the street.", "draw");
       else if (foeDead) endFoeDown();
       else endRound("YOU'RE DOWN", "The foe hit first.", "f");
       return;
@@ -1430,7 +1452,7 @@ function runDuel(
     if (foeDead && playerDead && killByPlayer && killByFoe) {
       if (Math.abs(foeDeadAt - playerDeadAt) < 900) {
         roundOver = true;
-        endRound("DOUBLE KO!", "The ground opens…", "draw", true);
+        endRound("DOUBLE KO!", "Sudden death: first hit wins.", "draw", true);
         return;
       }
     }
@@ -1440,12 +1462,12 @@ function runDuel(
       if (live && !(foeDead && playerDead)) {
         window.setTimeout(() => { if (!roundOver) maybeEnd(); }, 350);
         // but don't hang forever: resolve ammo-out below anyway
-        if (foeDead && playerDead) { roundOver = true; endRound("DOUBLE KO!", "The ground opens…", "draw", true); return; }
+        if (foeDead && playerDead) { roundOver = true; endRound("DOUBLE KO!", "Sudden death: first hit wins.", "draw", true); return; }
         if (foeDead || playerDead) {
           // give bullets 600ms max, then resolve
           window.setTimeout(() => {
             if (roundOver) return;
-            if (foeHP <= 0 && playerHP <= 0) { roundOver = true; endRound("DOUBLE KO!", "The ground opens…", "draw", true); }
+            if (foeHP <= 0 && playerHP <= 0) { roundOver = true; endRound("DOUBLE KO!", "Sudden death: first hit wins.", "draw", true); }
             else if (foeHP <= 0) { roundOver = true; endFoeDown(); }
             else if (playerHP <= 0) { roundOver = true; endRound("YOU'RE DOWN", "The foe takes it.", "f"); }
           }, 650);
@@ -1460,7 +1482,7 @@ function runDuel(
         }
       }
       roundOver = true;
-      if (foeDead && playerDead) endRound("DOUBLE KO!", "The ground opens…", "draw", true);
+      if (foeDead && playerDead) endRound("DOUBLE KO!", "Sudden death: first hit wins.", "draw", true);
       else if (foeDead) endFoeDown();
       else endRound("YOU'RE DOWN", "The foe takes it.", "f");
       return;
@@ -1473,7 +1495,7 @@ function runDuel(
       if (hellRound) {
         // Hell never repeats (user 2026-10-05): every bullet missed, so it
         // counts as a drawn round and play goes back to the street.
-        endRound("NO BLOOD DRAWN", "Hell spares you both. Back to the street.", "draw");
+        endRound("NO BLOOD DRAWN", "Sudden death spares you both. Back to the street.", "draw");
         return;
       }
       if (playerHP === foeHP) endRound("DRAW — REPLAY", "Same HP.", "draw", false);
@@ -1657,7 +1679,7 @@ function runDuel(
     const canBuy = p.gold >= price;
     if (!hasToken && !canBuy && !adapter.adsEnabled) { onDecline(); return; }
     const ov = el(`<div class="revive" style="position:absolute;left:50%;top:58%;transform:translate(-50%,-50%);background:rgba(20,10,5,.92);border:2px solid #d4af37;border-radius:12px;padding:16px 20px;color:#ffe9bd;text-align:center;z-index:20;">
-      <div style="font-weight:800;letter-spacing:.1em;">REVIVE? — 1HP, SAME ROUND REST bloomS FRESH</div>
+      <div style="font-weight:800;letter-spacing:.1em;">${AID_KIT_ICON}REVIVE? — 1HP, SAME ROUND REST bloomS FRESH</div>
       <div style="font-size:13px;opacity:.9;margin:6px 0;">${hasToken ? "Use your token (once per game)." : `Emergency buy ${price}g (1.5× shop).`}</div>
       <div><button data-r="yes">${hasToken ? "USE TOKEN" : `BUY + REVIVE (${price}g)`}</button>
       ${adapter.adsEnabled ? `<button data-r="ad">WATCH AD INSTEAD</button>` : ``}
@@ -1849,6 +1871,7 @@ function runDuel(
           if (r.head) { killFoe(true, point, dir); }
           else {
             const dmg = bodyDamage(gun.baseDamage, distM);
+            lifesteal(Math.min(dmg, foeHP));
             if (hellRound || dmg >= foeHP) killFoe(false, point, dir); // hell: any hit kills
             else woundFoe(dmg);
           }
