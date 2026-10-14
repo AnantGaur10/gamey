@@ -42,6 +42,9 @@ export interface MapDef {
   paintGain: number;
   /** Dust kind when a miss flies on past the foe into the backdrop. */
   backdrop: "wood" | "ground";
+  /** Night only: off-lane set read (setGlb addNightVis). fill = flat
+      moonlight on the set colours, fog = fog distance scale off the lane. */
+  nightVis?: { fill: number; fog: number };
 }
 
 /** Stage preset with colour overrides; fogDensity always comes from the base. */
@@ -172,6 +175,7 @@ const FALLS: MapDef = {
   shadow: 1,
   paintGain: 1,
   backdrop: "ground",
+  nightVis: { fill: 0.14, fog: 0.45 },
 };
 
 // Town: an overcast street between houses (telegraph poles + wires);
@@ -216,6 +220,7 @@ const TOWN: MapDef = {
   shadow: 0.7,
   paintGain: 1,
   backdrop: "wood",
+  nightVis: { fill: 0.12, fog: 0.55 },
 };
 
 export const MAPS: Record<MapId, MapDef> = { street: STREET, saloon: SALOON, falls: FALLS, town: TOWN };

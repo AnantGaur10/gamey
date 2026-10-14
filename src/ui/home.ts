@@ -475,6 +475,7 @@ function runDuel(
     s.setGlow(hell ? 1 : mapDef.glow[k]);
     s.setWindow(mapDef.window[hell ? 3 : k]);
     s.setShaft(mapDef.shaft[hell ? 3 : k]);
+    s.setNightVis(!hell && k === 2 ? mapDef.nightVis ?? null : null);
   }
   if (mapDef.glb) {
     for (const n of ["ProceduralStreet", "ProceduralDressing"]) {

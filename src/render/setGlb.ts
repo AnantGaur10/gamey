@@ -25,6 +25,8 @@ export interface MapSet {
   setWindow(hex: number): void;
   /** S_Shaft sunbeam strength 0..1. */
   setShaft(k: number): void;
+  /** Night read of the surroundings (MapDef.nightVis); null = off. */
+  setNightVis(v: { fill: number; fog: number } | null): void;
   dispose(): void;
 }
 
@@ -153,6 +155,58 @@ function addWater(mat: THREE.Material, uTime: U, uHell: U): void {
   });
 }
 
+/** Night surroundings (user 2026-10-14: "see vaguely the surroundings" at
+    night, not the foe). Off the duel lane only: set colours get a flat
+    moonlight fill and a lighter fog. The lane (|lateral| < LANE_IN from the
+    player->foe line) keeps the full night fog and light, so whatever sits
+    behind the foe stays black and he never shows as a silhouette; the lane is
+    depth-agnostic, so it does not tell his distance either. The duelists,
+    the arena floor and fogDensity are untouched (night difficulty = fog). */
+const LANE_IN = 2.5, LANE_OUT = 8.0;
+function addNightVis(mat: THREE.Material, uVis: U, uFill: U, uFog: U, lane: THREE.Vector4): void {
+  chain(mat, "nightvis", (sh) => {
+    sh.uniforms.uNvOn = uVis;
+    sh.uniforms.uNvFill = uFill;
+    sh.uniforms.uNvFog = uFog;
+    sh.uniforms.uNvLane = { value: lane };
+    sh.vertexShader = sh.vertexShader
+      .replace("#include <common>", "#include <common>\nvarying vec3 vNvW;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvNvW = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+    sh.fragmentShader = sh.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+        varying vec3 vNvW;
+        uniform float uNvOn;
+        uniform float uNvFill;
+        uniform float uNvFog;
+        uniform vec4 uNvLane;
+        float nvOff = 0.0;`,
+      )
+      .replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+        nvOff = uNvOn * smoothstep(${LANE_IN.toFixed(1)}, ${LANE_OUT.toFixed(1)}, abs(dot(vNvW.xz - uNvLane.xy, uNvLane.zw)));`,
+      )
+      .replace(
+        "#include <emissivemap_fragment>",
+        "#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * uNvFill * nvOff;",
+      )
+      .replace(
+        "#include <fog_fragment>",
+        `#ifdef USE_FOG
+          float nvDepth = vFogDepth * mix(1.0, uNvFog, nvOff);
+          #ifdef FOG_EXP2
+            float fogFactor = 1.0 - exp(-fogDensity * fogDensity * nvDepth * nvDepth);
+          #else
+            float fogFactor = smoothstep(fogNear, fogFar, nvDepth);
+          #endif
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColor, fogFactor);
+        #endif`,
+      );
+  });
+}
+
 const GLOW_DAY = 0xffb45a;
 const GLOW_HELL = 0xff4a1a;
 
@@ -175,20 +229,26 @@ export async function loadMapSet(url: string, distM: number, paintGain = 1): Pro
 
     const uHell: U = { value: 0 };
     const uTime: U = { value: 0 };
+    const uVis: U = { value: 0 }, uFill: U = { value: 0 }, uFog: U = { value: 1 };
+    // Lane: origin (player, xz) + unit perpendicular of the duel line (xz).
+    const lane = new THREE.Vector4(pPos.x, pPos.z, -duelDir.z, duelDir.x);
     // Colour is baked (palette x AO x sun shadow) and no normals ship:
     // flat Lambert like the street.
     const paint = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
     paint.color.setScalar(paintGain); // linear multiplier on the baked colours
     addDirtDetail(paint, duelDir, 0.02);
     addHell(paint, uHell);
+    addNightVis(paint, uVis, uFill, uFog, lane);
     const foliage = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
     foliage.color.setScalar(paintGain);
     addWind(foliage, uTime);
     addHell(foliage, uHell);
+    addNightVis(foliage, uVis, uFill, uFog, lane);
     const glow = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, emissive: GLOW_DAY, emissiveIntensity: 0 });
     addHell(glow, uHell);
     const water = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
     addWater(water, uTime, uHell);
+    addNightVis(water, uVis, uFill, uFog, lane);
     const sky = new THREE.MeshBasicMaterial({ vertexColors: true, fog: false });
     const shaft = new THREE.MeshBasicMaterial({
       vertexColors: true, fog: false, transparent: true, depthWrite: false,
@@ -249,6 +309,11 @@ export async function loadMapSet(url: string, distM: number, paintGain = 1): Pro
       setShaft(k) {
         shaft.opacity = Math.max(0, Math.min(1, k));
         shaft.visible = shaft.opacity > 0.01;
+      },
+      setNightVis(v) {
+        uVis.value = v ? 1 : 0;
+        uFill.value = v?.fill ?? 0;
+        uFog.value = v?.fog ?? 1;
       },
       dispose() {
         group.removeFromParent();
