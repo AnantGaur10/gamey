@@ -21,6 +21,7 @@ import { mountFocusUI, isCoarsePointer, type FocusUI } from "./focus";
 import { mountCoach, type Coach } from "./coach";
 import { TimingQte } from "../game/timingQte";
 import { storagePersisted } from "../store/SafeStore";
+import { needsTutorial, markTutorialSeen } from "../portal/firstLaunch";
 import { createAudioManager, type AudioManager } from "../audio/AudioManager";
 
 export type Mode = "standard" | "deathmatch" | "tutorial";
@@ -80,14 +81,8 @@ export function boot(root: HTMLElement, adapter: PortalAdapter): void {
   // Tutorial-first for new players: the gateway into the game (user
   // 2026-10-12). In-gameplay, skippable; finishing or skipping it marks it
   // done, so it is never forced again (replay from the home menu / shop).
-  const isNew =
-    !progress.tutorialDone &&
-    progress.gold === 0 &&
-    progress.bestStreak === 0 &&
-    progress.bestBestOf === 0 &&
-    progress.reviveToken === 0 &&
-    progress.gunsOwned.length <= 1;
-  if (isNew) {
+  // Who counts as new: src/portal/firstLaunch.ts.
+  if (needsTutorial(adapter, progress)) {
     runDuel(root, adapter, "tutorial", audio);
   } else {
     showHome(root, adapter, audio);
@@ -557,10 +552,7 @@ function runDuel(
     coach.step(opts.retry ? "retry" : "holster");
   }
   function markTutorialDone(): void {
-    const prog = adapter.loadProgress();
-    if (prog.tutorialDone) return;
-    prog.tutorialDone = true;
-    adapter.saveProgress(prog);
+    markTutorialSeen(adapter);
   }
 
   const machine = new DuelMachine({
