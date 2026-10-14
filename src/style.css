@@ -19,7 +19,15 @@ html, body {
   -webkit-touch-callout: none;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
-#app { position: fixed; inset: 0; touch-action: manipulation; }
+#app { position: fixed; inset: 0; z-index: 1; touch-action: manipulation; }
+/* Live menu backdrop (ui/menuScene.ts): its own fixed layer behind #app, so
+   home / shop / map screens keep it running. Canvas fades in once the first
+   standoff is built (CSS sky until then); .mfade blacks out between loops. */
+#menu-bg { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+#menu-bg canvas { display: block; width: 100%; height: 100%; transition: opacity 1.2s ease; }
+#menu-bg.loading canvas { opacity: 0; }
+#menu-bg .mfade { position: absolute; inset: 0; background: #0d0704; opacity: 0; transition: opacity 0.8s ease; }
+#menu-bg .mfade.on { opacity: 1; }
 #app canvas { display: block; width: 100%; height: 100%; touch-action: manipulation; }
 /* In-duel: OS pointer hidden everywhere, crosshair is the pointer. Menus keep it. */
 body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; }
@@ -236,10 +244,10 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 }
 .menu button:disabled { opacity: 0.5; }
 .menu .note { font-size: 13px; opacity: 0.85; max-width: 460px; text-align: center; color: #ffe9bd; text-shadow: 0 1px 4px #000; }
-/* Armory: transparent over the scene (no black veil) + dark-wood cards. */
+/* Armory: dark veil over the live menu backdrop + dark-wood cards. */
 .shop {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 10px; pointer-events: auto; cursor: default; background: transparent; padding: 16px;
+  gap: 10px; pointer-events: auto; cursor: default; background: rgba(14, 7, 3, 0.62); padding: 16px;
 }
 .shop h2 {
   margin: 0 0 4px; letter-spacing: 0.14em;
@@ -282,13 +290,142 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
   .menu h1 { font-size: 34px; }
   .menu button { min-width: 240px; font-size: 16px; }
 }
-/* Home MAP picker (cycles on click): quieter than the mode buttons. */
-.menu button.mapbtn { font-size: 15px; letter-spacing: .08em; opacity: .92; }
+/* Home (user 2026-10-14): live showdown behind, title top-left, options
+   bottom-left (game-menu style), gold + sound top-right. Scoped to
+   .menu.home: the plain .menu rules still dress the RUN OVER / VICTORY cards. */
+.menu.home { display: block; }
+.menu.home .scrim {
+  position: absolute; inset: 0; pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(14, 7, 3, 0.86) 0%, rgba(14, 7, 3, 0.6) 24%, rgba(14, 7, 3, 0.14) 46%, rgba(14, 7, 3, 0) 60%),
+    linear-gradient(0deg, rgba(14, 7, 3, 0.55) 0%, rgba(14, 7, 3, 0) 34%),
+    linear-gradient(180deg, rgba(14, 7, 3, 0.5) 0%, rgba(14, 7, 3, 0) 22%);
+}
+.menu.home .brand {
+  position: absolute; top: calc(36px + env(safe-area-inset-top)); left: calc(48px + env(safe-area-inset-left));
+  display: flex; align-items: center; gap: 18px; animation: brandin 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.menu.home .badge { display: flex; }
+.menu.home .badge svg { width: 78px; height: 78px; filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.6)); }
+.menu.home h1 { margin: 0; display: flex; flex-direction: column; line-height: 0.95; letter-spacing: 0; text-shadow: none; }
+.menu.home h1 .t1 {
+  font-family: "Rye", Georgia, "Times New Roman", serif; font-size: 70px; letter-spacing: 0.05em;
+  background: linear-gradient(180deg, #fff3cf 0%, #ffd678 46%, #c38a1c 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 3px 0 #4a2c10) drop-shadow(0 8px 18px rgba(0, 0, 0, 0.7));
+}
+.menu.home h1 .t2 {
+  display: flex; align-items: center; gap: 14px; margin-top: 8px;
+  font-size: 17px; font-weight: 800; letter-spacing: 0.9em; color: #ffe9bd; text-shadow: 0 2px 6px #000;
+}
+.menu.home h1 .t2::before { content: ""; width: 46px; height: 2px; background: linear-gradient(90deg, rgba(255, 214, 120, 0), #ffd678); }
+.menu.home .opts {
+  position: absolute; left: calc(40px + env(safe-area-inset-left)); bottom: calc(54px + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; gap: 4px;
+}
+.menu.home .opt {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  min-width: 0; width: 400px; max-width: calc(100vw - 32px); padding: 9px 18px 9px 26px;
+  border: 0; border-radius: 0 10px 10px 0; background: transparent; box-shadow: none; text-align: left;
+  color: #f3e2bd; cursor: pointer; outline: none;
+  transition: transform 0.18s ease, background 0.18s ease;
+  animation: optin 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.menu.home .opt:nth-child(1) { animation-delay: 0.12s; }
+.menu.home .opt:nth-child(2) { animation-delay: 0.18s; }
+.menu.home .opt:nth-child(3) { animation-delay: 0.24s; }
+.menu.home .opt:nth-child(4) { animation-delay: 0.3s; }
+.menu.home .opt:nth-child(5) { animation-delay: 0.36s; }
+.menu.home .opt::before {
+  content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 4px; border-radius: 2px;
+  background: linear-gradient(#fff0c0, #d4af37); box-shadow: 0 0 12px rgba(255, 214, 120, 0.7);
+  transform: scaleY(0); transition: transform 0.18s ease;
+}
+.menu.home .opt .lbl {
+  font-family: "Rye", Georgia, "Times New Roman", serif; font-size: 30px; line-height: 1.05; letter-spacing: 0.05em;
+  color: #f3e2bd; text-shadow: 0 2px 0 #2b1a10, 0 4px 14px rgba(0, 0, 0, 0.75); transition: color 0.18s;
+}
+.menu.home .opt small {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase;
+  color: rgba(255, 233, 189, 0.62); text-shadow: 0 1px 3px #000;
+}
+.menu.home .opt.primary .lbl { font-size: 48px; color: #ffd678; }
+.menu.home .opt.primary small { color: rgba(255, 233, 189, 0.85); }
+.menu.home .opt:hover, .menu.home .opt:focus {
+  transform: translateX(10px); filter: none; box-shadow: none;
+  background: linear-gradient(90deg, rgba(212, 175, 55, 0.26), rgba(212, 175, 55, 0.06) 70%, rgba(212, 175, 55, 0));
+}
+.menu.home .opt:hover::before, .menu.home .opt:focus::before { transform: scaleY(1); }
+.menu.home .opt:hover .lbl, .menu.home .opt:focus .lbl { color: #ffd678; }
+.menu.home .opt:active { transform: translateX(10px) scale(0.98); }
+/* Map option: the chosen map's picture (or the die) inline. */
+.menu.home .optthumb {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 44px; height: 25px; border-radius: 4px; overflow: hidden;
+  border: 1px solid rgba(255, 214, 120, 0.6); background: #3a2412;
+}
+.menu.home .optthumb img { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.menu.home .optthumb.random { background: radial-gradient(circle at 50% 40%, #a3a3a3, #6e6e6e); }
+.menu.home .optthumb .mapdice { height: 86%; filter: none; }
+.menu.home .topbar {
+  position: absolute; top: calc(16px + env(safe-area-inset-top)); right: calc(18px + env(safe-area-inset-right));
+  display: flex; align-items: center; gap: 10px; animation: brandin 0.7s 0.1s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.menu.home .chip {
+  display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px 0 8px; border-radius: 20px;
+  background: rgba(20, 10, 4, 0.62); border: 1px solid rgba(255, 214, 120, 0.45);
+  color: #ffd678; font-size: 17px; text-shadow: 0 1px 3px #000;
+}
+.menu.home .chip svg { width: 26px; height: 26px; }
+.menu.home .mute-btn {
+  position: static; width: 40px; height: 40px; min-width: 0; padding: 0; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(20, 10, 4, 0.62); border: 1px solid rgba(255, 214, 120, 0.45); box-shadow: none;
+  color: #ffe9bd; transition: background 0.15s, color 0.15s;
+}
+.menu.home .mute-btn svg { width: 22px; height: 22px; }
+.menu.home .mute-btn.off { color: rgba(255, 233, 189, 0.5); }
+.menu.home .mute-btn:hover { background: rgba(60, 36, 12, 0.8); filter: none; box-shadow: none; }
+.menu.home .record {
+  position: absolute; right: calc(22px + env(safe-area-inset-right)); bottom: calc(18px + env(safe-area-inset-bottom));
+  font-size: 12px; font-weight: 700; letter-spacing: 0.22em; color: rgba(255, 233, 189, 0.75); text-shadow: 0 1px 3px #000;
+}
+.menu.home .record b { margin-left: 6px; font-size: 18px; color: #ffd678; letter-spacing: 0.05em; }
+@keyframes brandin { from { opacity: 0; transform: translateY(-14px); } to { opacity: 1; transform: none; } }
+@keyframes optin { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
+/* Short screens (QA 907x510, mobile 800x450): tighter, captions last to go. */
+@media (max-height: 620px) {
+  .menu.home .brand { top: calc(16px + env(safe-area-inset-top)); left: calc(20px + env(safe-area-inset-left)); gap: 12px; }
+  .menu.home .badge svg { width: 48px; height: 48px; }
+  .menu.home h1 .t1 { font-size: 40px; }
+  .menu.home h1 .t2 { font-size: 12px; margin-top: 4px; }
+  .menu.home h1 .t2::before { width: 26px; }
+  .menu.home .opts { left: calc(14px + env(safe-area-inset-left)); bottom: calc(16px + env(safe-area-inset-bottom)); gap: 2px; }
+  .menu.home .opt { width: 330px; padding: 6px 14px 6px 20px; gap: 2px; }
+  .menu.home .opt .lbl { font-size: 21px; }
+  .menu.home .opt.primary .lbl { font-size: 30px; }
+  .menu.home .opt small { font-size: 10px; letter-spacing: 0.14em; }
+  .menu.home .optthumb { width: 32px; height: 18px; }
+  .menu.home .topbar { top: calc(10px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right)); }
+  .menu.home .chip { height: 34px; font-size: 15px; }
+  .menu.home .chip svg { width: 22px; height: 22px; }
+  .menu.home .mute-btn { width: 34px; height: 34px; }
+  .menu.home .mute-btn svg { width: 19px; height: 19px; }
+}
+@media (max-height: 480px) {
+  .menu.home .opt small { display: none; }
+  .menu.home .opt[data-m="map"] small { display: flex; } /* which map stays visible */
+}
+@media (prefers-reduced-motion: reduce) {
+  .menu.home .brand, .menu.home .opt, .menu.home .topbar { animation: none; }
+  #menu-bg canvas, #menu-bg .mfade { transition: none; }
+}
 /* Map picker: picture cards (16:9) + RANDOM die on grey. Card width fits
    5 in a row on desktop, 3 + 2 down to 800x450 (two rows + title + back). */
 .mappick {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 12px; padding: 12px; pointer-events: auto; cursor: default; background: rgba(20, 10, 4, 0.35);
+  gap: 12px; padding: 12px; pointer-events: auto; cursor: default; background: rgba(14, 7, 3, 0.62);
 }
 .mappick h2 {
   margin: 0; letter-spacing: 0.14em; font-family: "Rye", Georgia, "Times New Roman", serif;

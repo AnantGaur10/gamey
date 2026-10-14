@@ -20,6 +20,8 @@ import type { PortalAdapter } from "../portal/PortalAdapter";
 import { mountFocusUI, isCoarsePointer, type FocusUI } from "./focus";
 import { mountCoach, type Coach } from "./coach";
 import { TimingQte } from "../game/timingQte";
+import { quickDraw, gunOut, QD_END } from "../render/quickDraw";
+import { showMenuScene, hideMenuScene } from "./menuScene";
 import { storagePersisted } from "../store/SafeStore";
 import { needsTutorial, markTutorialSeen } from "../portal/firstLaunch";
 import { createAudioManager, type AudioManager } from "../audio/AudioManager";
@@ -29,13 +31,8 @@ export type Mode = "standard" | "deathmatch" | "tutorial";
 const SHOTS_PER_DUEL = 6;
 const BEST_OF = 3; // first to 2
 const FIRST_TO = Math.ceil(BEST_OF / 2);
-// Quick-draw (user 2026-10-05): guns start in the holster, hand on the grip.
-// At DRAW the hand grips (QD_GRIP), pulls the gun clear (gun node blends
-// holster -> hand until QD_OUT), swings up to level (QD_END). Cosmetic and
-// time-based; the fire gate below is the gameplay rule, on the fixed clock.
-const QD_GRIP = 0.05;
-const QD_OUT = 0.16;
-const QD_END = 0.3;
+// Quick-draw arm path + timings: render/quickDraw.ts (cosmetic, time-based);
+// the fire gate below is the gameplay rule, on the fixed clock.
 const DRAW_TICKS = 10; // 0.167s at 60Hz: no shot before the gun clears the holster
 // Last known OS pointer (survives across rounds): a new round's crosshair
 // starts where the mouse really is instead of a guessed screen point.
@@ -89,50 +86,83 @@ export function boot(root: HTMLElement, adapter: PortalAdapter): void {
   }
 }
 
+// Home (user 2026-10-14: "modern but keep the cowboy aspects", options
+// bottom-left like most games): live showdown behind (ui/menuScene.ts),
+// title top-left, options stacked bottom-left, gold + sound top-right.
+// Arrow keys / W-S move between options; Enter / Space press (no Esc).
+const SPEAKER_ON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+const SPEAKER_OFF = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16.5 9.5l5 5M21.5 9.5l-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+const COIN_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#e8b43a" stroke="#6b4a10" stroke-width="1.6"/><circle cx="12" cy="12" r="7" fill="none" stroke="#8a6414" stroke-width="1.2"/><path d="M12 7.2l1.4 2.9 3.2.4-2.3 2.2.6 3.2L12 14.4l-2.9 1.5.6-3.2-2.3-2.2 3.2-.4z" fill="#8a6414"/></svg>`;
+const STAR_ICON = `<svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="30" fill="#2b1a10" stroke="#d4af37" stroke-width="3"/><path d="M32 8l6.2 13.4 14.7 1.7-10.9 10 2.9 14.5L32 40.3l-12.9 7.3 2.9-14.5-10.9-10 14.7-1.7z" fill="#ffd678" stroke="#8a6414" stroke-width="2" stroke-linejoin="round"/><g fill="#ffd678" stroke="#8a6414" stroke-width="1.5"><circle cx="32" cy="8" r="3"/><circle cx="52.9" cy="23.1" r="3"/><circle cx="44.9" cy="47.6" r="3"/><circle cx="19.1" cy="47.6" r="3"/><circle cx="11.1" cy="23.1" r="3"/></g></svg>`;
+
 export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager): void {
   audio.playMusic('home-screen');
   root.innerHTML = "";
-  const menu = el(`<div class="menu">
-    <h1>HIGH NOON DUEL</h1>
-    <button class="primary" data-m="standard">STANDARD — BEST OF ${BEST_OF}</button>
-    <button data-m="deathmatch">DEATHMATCH — STREAK</button>
-    <button data-m="map" class="mapbtn"></button>
-    <button data-m="shop">SHOP</button>
-    <button data-m="tutorial" class="mapbtn">HOW TO PLAY — TUTORIAL</button>
-  </div>`);
-  
-  // Mute button (top-right)
-  const muteBtn = document.createElement("button");
-  muteBtn.className = "mute-btn";
-  muteBtn.title = "Toggle audio";
-  muteBtn.textContent = audio.isMuted() ? "🔇" : "🔊";
-  muteBtn.addEventListener("click", () => {
-    const progress = adapter.loadProgress();
-    progress.settings.mute = audio.toggleMute();
-    adapter.saveProgress(progress);
-    muteBtn.textContent = audio.isMuted() ? "🔇" : "🔊";
-  });
-  root.appendChild(muteBtn);
-  
-  root.appendChild(menu);
-  // MAP button (user 2026-10-12) opens the picker screen (showMapPicker);
+  const progress = adapter.loadProgress();
+  // MAP option (user 2026-10-12) opens the picker screen (showMapPicker);
   // the choice is saved with the progress, and a series or run rolls
   // "Random" once at its start.
-  const mapBtn = menu.querySelector<HTMLButtonElement>("[data-m=map]")!;
-  const savedMap = adapter.loadProgress().settings.map;
-  let mapChoice: MapChoice = isMapChoice(savedMap) ? savedMap : "random";
-  const paintMap = () => { mapBtn.textContent = `MAP: ${mapLabel(mapChoice)} ▸`; };
-  paintMap();
-  menu.querySelectorAll("button").forEach((b) => {
+  const mapChoice: MapChoice = isMapChoice(progress.settings.map) ? progress.settings.map : "random";
+  showMenuScene(mapChoice, progress.equippedGun);
+  const base = import.meta.env.BASE_URL;
+  const mapThumb = mapChoice === "random"
+    ? `<span class="optthumb random">${DICE_ICON}</span>`
+    : `<span class="optthumb"><img src="${base}maps/${mapChoice}.jpg" alt="" draggable="false"></span>`;
+  const menu = el(`<div class="menu home">
+    <div class="scrim"></div>
+    <header class="brand">
+      <span class="badge">${STAR_ICON}</span>
+      <h1><span class="t1">HIGH NOON</span><span class="t2">DUEL</span></h1>
+    </header>
+    <nav class="opts">
+      <button class="opt primary" data-m="standard"><span class="lbl">PLAY</span><small>Standard duel · best of ${BEST_OF}</small></button>
+      <button class="opt" data-m="deathmatch"><span class="lbl">DEATHMATCH</span><small>Duel after duel · one life</small></button>
+      <button class="opt" data-m="map"><span class="lbl">MAP</span><small>${mapThumb}${mapLabel(mapChoice)}</small></button>
+      <button class="opt" data-m="shop"><span class="lbl">ARMORY</span><small>Revolvers · revive token</small></button>
+      <button class="opt" data-m="tutorial"><span class="lbl">HOW TO PLAY</span><small>Tutorial</small></button>
+    </nav>
+    <div class="topbar">
+      <span class="chip gold" title="Gold">${COIN_ICON}<b>${progress.gold}</b></span>
+      <button class="mute-btn" title="Sound on / off"></button>
+    </div>
+    ${progress.bestStreak > 0 ? `<div class="record">BEST STREAK <b>${progress.bestStreak}</b></div>` : ""}
+  </div>`);
+  root.appendChild(menu);
+
+  const muteBtn = menu.querySelector<HTMLButtonElement>(".mute-btn")!;
+  const paintMute = () => {
+    muteBtn.innerHTML = audio.isMuted() ? SPEAKER_OFF : SPEAKER_ON;
+    muteBtn.classList.toggle("off", audio.isMuted());
+  };
+  paintMute();
+  muteBtn.addEventListener("click", () => {
+    const p = adapter.loadProgress();
+    p.settings.mute = audio.toggleMute();
+    adapter.saveProgress(p);
+    paintMute();
+  });
+
+  const opts = Array.from(menu.querySelectorAll<HTMLButtonElement>(".opt"));
+  opts.forEach((b) => {
     b.addEventListener("click", () => {
-      const m = (b as HTMLElement).dataset.m as Mode | "shop" | "map";
+      const m = b.dataset.m as Mode | "shop" | "map";
       if (m === "map") showMapPicker(root, adapter, audio, mapChoice);
       else if (m === "shop") showShop(root, adapter, audio);
       else if (m === "standard") runSeries(root, adapter, m, audio);
       else if (m === "deathmatch") runDeathmatch(root, adapter, audio);
       else runDuel(root, adapter, m, audio);
     });
+    b.addEventListener("pointerenter", () => b.focus({ preventScroll: true }));
   });
+  const onKey = (e: KeyboardEvent): void => {
+    if (!menu.isConnected) { window.removeEventListener("keydown", onKey); return; }
+    const dirKey = e.code === "ArrowDown" || e.code === "KeyS" ? 1 : e.code === "ArrowUp" || e.code === "KeyW" ? -1 : 0;
+    if (!dirKey) return;
+    e.preventDefault();
+    const i = opts.indexOf(document.activeElement as HTMLButtonElement);
+    opts[i < 0 ? (dirKey > 0 ? 0 : opts.length - 1) : (i + dirKey + opts.length) % opts.length].focus({ preventScroll: true });
+  };
+  window.addEventListener("keydown", onKey);
 }
 
 /** Random map card: a die on grey (user 2026-10-14). */
@@ -143,6 +173,7 @@ const DICE_ICON = `<svg class="mapdice" viewBox="0 0 100 100" aria-hidden="true"
     as a die on grey. Picking saves the choice and returns home. */
 function showMapPicker(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager, current: MapChoice): void {
   root.innerHTML = "";
+  showMenuScene(current, adapter.loadProgress().equippedGun);
   const base = import.meta.env.BASE_URL;
   const card = (c: MapChoice): string => {
     const pic = c === "random"
@@ -180,6 +211,7 @@ const AID_KIT_ICON = `<svg class="sicon" viewBox="0 0 48 36" aria-hidden="true">
 function showShop(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager): void {
   root.innerHTML = "";
   const p = adapter.loadProgress();
+  showMenuScene(isMapChoice(p.settings.map) ? p.settings.map : "random", p.equippedGun);
   const can = (price: number) => p.gold >= price;
   const shop = el(`<div class="shop">
     <h2>ARMORY</h2>
@@ -306,6 +338,7 @@ function runDuel(
   // duels stay on Main Street. DEV probes can force one.
   const mapId: MapId = opts.map ?? series?.map ?? run?.map ?? "street";
   const mapDef = MAPS[mapId];
+  hideMenuScene(); // one GL context at a time: the duel builds its own arena
   audio.stopMusic();
   audio.playMusic('duel');
   root.innerHTML = "";
@@ -2121,34 +2154,6 @@ function runDuel(
     player.elbowR.rotation.x += (elbowTarget - player.elbowR.rotation.x) * fast;
   }
 
-  // Quick-draw arm path from the hand-on-holster pose `f`: hold while the
-  // hand grips, pull up (elbow folds, hand rises along the holster), swing
-  // out past level, settle level (0.05, 0, 0). Smoothstep between keys.
-  function quickDraw(t: number, f: { s: number; z: number; e: number }): { s: number; z: number; e: number } {
-    const keys: Array<[number, number, number, number]> = [
-      [0, f.s, f.z, f.e],
-      [QD_GRIP, f.s, f.z, f.e],
-      [QD_OUT, f.s + (0.05 - f.s) * 0.45, f.z * 0.4, f.e - 0.35],
-      [QD_END - 0.08, -0.12, 0, 0.08],
-      [QD_END, 0.05, 0, 0],
-    ];
-    if (t <= 0) return { s: f.s, z: f.z, e: f.e };
-    for (let i = 1; i < keys.length; i++) {
-      if (t <= keys[i][0]) {
-        const [t0, s0, z0, e0] = keys[i - 1];
-        const [t1, s1, z1, e1] = keys[i];
-        let u = (t - t0) / (t1 - t0);
-        u = u * u * (3 - 2 * u); // smoothstep: no pops between phases
-        return { s: s0 + (s1 - s0) * u, z: z0 + (z1 - z0) * u, e: e0 + (e1 - e0) * u };
-      }
-    }
-    return { s: 0.05, z: 0, e: 0 };
-  }
-  /** Gun node blend holster -> hand for quick-draw time t. */
-  const gunOut = (t: number): number => {
-    const u = Math.min(1, Math.max(0, (t - QD_GRIP) / (QD_OUT - QD_GRIP)));
-    return u * u * (3 - 2 * u);
-  };
   /** Pose one duelist's arm + gun along the quick-draw (direct set: the
       path is already smooth, a chase would blur the fast pull). */
   function stepQuickDraw(c: Cowboy, from: { s: number; z: number; e: number }, lift: number): void {
