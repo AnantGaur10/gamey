@@ -115,8 +115,9 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
   root.appendChild(muteBtn);
   
   root.appendChild(menu);
-  // MAP picker (user 2026-10-12): cycles Random / each map, saved with the
-  // progress; a series or run rolls "Random" once at its start.
+  // MAP button (user 2026-10-12) opens the picker screen (showMapPicker);
+  // the choice is saved with the progress, and a series or run rolls
+  // "Random" once at its start.
   const mapBtn = menu.querySelector<HTMLButtonElement>("[data-m=map]")!;
   const savedMap = adapter.loadProgress().settings.map;
   let mapChoice: MapChoice = isMapChoice(savedMap) ? savedMap : "random";
@@ -125,18 +126,47 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
   menu.querySelectorAll("button").forEach((b) => {
     b.addEventListener("click", () => {
       const m = (b as HTMLElement).dataset.m as Mode | "shop" | "map";
-      if (m === "map") {
-        mapChoice = MAP_CHOICES[(MAP_CHOICES.indexOf(mapChoice) + 1) % MAP_CHOICES.length];
-        const progress = adapter.loadProgress();
-        progress.settings.map = mapChoice;
-        adapter.saveProgress(progress);
-        paintMap();
-      } else if (m === "shop") showShop(root, adapter, audio);
+      if (m === "map") showMapPicker(root, adapter, audio, mapChoice);
+      else if (m === "shop") showShop(root, adapter, audio);
       else if (m === "standard") runSeries(root, adapter, m, audio);
       else if (m === "deathmatch") runDeathmatch(root, adapter, audio);
       else runDuel(root, adapter, m, audio);
     });
   });
+}
+
+/** Random map card: a die on grey (user 2026-10-14). */
+const DICE_ICON = `<svg class="mapdice" viewBox="0 0 100 100" aria-hidden="true"><path d="M50 8 88 28v44L50 92 12 72V28z" fill="#f4f1ea" stroke="#2a2a2a" stroke-width="4" stroke-linejoin="round"/><path d="M12 28 50 48 88 28M50 48v44" fill="none" stroke="#2a2a2a" stroke-width="4" stroke-linejoin="round"/><path d="M50 48 88 28v44L50 92z" fill="#d9d4c8"/><path d="M12 28 50 48v44L12 72z" fill="#e8e3d8"/><path d="M12 28 50 48 88 28M50 48v44M50 8 88 28v44L50 92 12 72V28z" fill="none" stroke="#2a2a2a" stroke-width="4" stroke-linejoin="round"/><g fill="#b3201c"><ellipse cx="50" cy="28" rx="6" ry="3.6"/><ellipse cx="34" cy="20.5" rx="4.6" ry="2.8"/><ellipse cx="66" cy="35.5" rx="4.6" ry="2.8"/></g><g fill="#2a2a2a"><circle cx="24" cy="48" r="4.2"/><circle cx="38" cy="72" r="4.2"/><circle cx="62" cy="58" r="4.2"/><circle cx="76" cy="44" r="4.2"/><circle cx="62" cy="80" r="4.2"/><circle cx="76" cy="66" r="4.2"/></g></svg>`;
+
+/** Map picker (user 2026-10-14): a card per map with its picture (noon
+    captures in public/maps/, fetched only when this screen opens) + RANDOM
+    as a die on grey. Picking saves the choice and returns home. */
+function showMapPicker(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager, current: MapChoice): void {
+  root.innerHTML = "";
+  const base = import.meta.env.BASE_URL;
+  const card = (c: MapChoice): string => {
+    const pic = c === "random"
+      ? `<span class="mappic random">${DICE_ICON}</span>`
+      : `<span class="mappic"><img src="${base}maps/${c}.jpg" alt="" draggable="false"></span>`;
+    return `<button class="mapcard${c === current ? " on" : ""}" data-map="${c}">${pic}<span class="mapname">${mapLabel(c)}</span></button>`;
+  };
+  const page = el(`<div class="mappick">
+    <h2>CHOOSE YOUR MAP</h2>
+    <div class="mapgrid">${MAP_CHOICES.map(card).join("")}</div>
+    <button class="mapback" data-b="back">BACK</button>
+  </div>`);
+  root.appendChild(page);
+  page.querySelectorAll<HTMLButtonElement>(".mapcard").forEach((b) => {
+    b.addEventListener("click", () => {
+      const c = b.dataset.map;
+      if (!isMapChoice(c)) return;
+      const progress = adapter.loadProgress();
+      progress.settings.map = c;
+      adapter.saveProgress(progress);
+      showHome(root, adapter, audio);
+    });
+  });
+  page.querySelector("[data-b=back]")!.addEventListener("click", () => showHome(root, adapter, audio));
 }
 
 /** Shop icons (user 2026-10-14): revolvers in their finish (render/cowboy

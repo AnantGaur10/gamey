@@ -284,6 +284,40 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 }
 /* Home MAP picker (cycles on click): quieter than the mode buttons. */
 .menu button.mapbtn { font-size: 15px; letter-spacing: .08em; opacity: .92; }
+/* Map picker: picture cards (16:9) + RANDOM die on grey. Card width fits
+   5 in a row on desktop, 3 + 2 down to 800x450 (two rows + title + back). */
+.mappick {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; padding: 12px; pointer-events: auto; cursor: default; background: rgba(20, 10, 4, 0.35);
+}
+.mappick h2 {
+  margin: 0; letter-spacing: 0.14em; font-family: "Rye", Georgia, "Times New Roman", serif;
+  font-size: 30px; color: #ffd678; text-shadow: 0 2px 0 #4a2c10, 0 5px 16px rgba(0, 0, 0, 0.8);
+}
+.mapgrid { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; max-width: 1640px; }
+.mapcard {
+  --w: clamp(150px, min(24vw, 52vh), 300px);
+  width: var(--w); padding: 0; display: flex; flex-direction: column; overflow: hidden; cursor: pointer;
+  border-radius: 10px; border: 2px solid #8a6a2a; background: #241407;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6); transition: transform 0.08s, filter 0.15s, box-shadow 0.15s;
+}
+.mapcard:hover { filter: brightness(1.12); box-shadow: 0 4px 20px rgba(212, 175, 55, 0.45); }
+.mapcard:active { transform: scale(0.97); }
+.mapcard.on { border-color: #ffd678; box-shadow: 0 0 0 2px #ffd678, 0 4px 22px rgba(255, 214, 120, 0.55); }
+.mappic { display: block; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; background: #3a2412; }
+.mappic img { display: block; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.mappic.random { display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(circle at 50% 40%, #a3a3a3, #6e6e6e); }
+.mapdice { height: 72%; filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.45)); }
+.mapname { display: block; padding: 6px 8px; font-size: 15px; font-weight: 800; letter-spacing: 0.08em;
+  color: #ffe9bd; text-shadow: 0 1px 3px #000; background: linear-gradient(180deg, #4a3010, #241407); }
+.mapcard.on .mapname { color: #ffd678; }
+.mappick .mapback {
+  padding: 10px 28px; font-size: 16px; font-weight: 800; letter-spacing: 0.06em; border-radius: 10px;
+  border: 2px solid #d4af37; cursor: pointer; color: #ffe9bd; text-shadow: 0 1px 3px #000;
+  background: linear-gradient(180deg, #4a3010, #241407); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+}
+.mappick .mapback:hover { filter: brightness(1.18); }
 /* Round line: one line at every QA size (the map name made it wrap at 800px:
    an absolute box at left:50% only gets half the width to shrink into). */
 .roundline { white-space: nowrap; }
