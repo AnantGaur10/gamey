@@ -42,20 +42,24 @@ interface SetView {
 interface MenuScene {
   setMap(choice: MapChoice): void;
   setGun(gunId: string): void;
+  /** Calm = the standoff only, no shots (behind the result cards: the hero
+      must not win behind a DEFEAT); loops fade on to the next standoff. */
+  setCalm(calm: boolean): void;
   dispose(): void;
 }
 
 let live: MenuScene | null = null;
 
 /** Start (or retarget) the menu backdrop. Idempotent across menu screens. */
-export function showMenuScene(choice: MapChoice, gunId: string): void {
+export function showMenuScene(choice: MapChoice, gunId: string, opts: { calm?: boolean } = {}): void {
   if (live) {
     live.setMap(choice);
     live.setGun(gunId);
+    live.setCalm(!!opts.calm);
     return;
   }
   try {
-    live = createMenuScene(choice, gunId);
+    live = createMenuScene(choice, gunId, !!opts.calm);
   } catch (err) {
     if (import.meta.env.DEV) console.warn("[gamey] menu backdrop failed", err);
     live = null;
@@ -88,7 +92,7 @@ function disposeCowboy(c: Cowboy | null, scene: THREE.Scene): void {
   c.group.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
 }
 
-function createMenuScene(initialChoice: MapChoice, initialGun: string): MenuScene {
+function createMenuScene(initialChoice: MapChoice, initialGun: string, initialCalm: boolean): MenuScene {
   const host = hostEl();
   host.replaceChildren();
   host.classList.add("loading");
@@ -154,6 +158,7 @@ function createMenuScene(initialChoice: MapChoice, initialGun: string): MenuScen
 
   let choice = initialChoice;
   let gunId = initialGun;
+  let calm = initialCalm;
   const order = [...MAP_IDS].sort(() => Math.random() - 0.5);
   let mapId: MapId = choice === "random" ? order[0] : choice;
   let loop = 0;
@@ -332,7 +337,14 @@ function createMenuScene(initialChoice: MapChoice, initialGun: string): MenuScen
   function update(dt: number, now: number): void {
     tPhase += dt;
     tShot += dt;
-    if (phase === "standoff" && tPhase >= standoffS && hero && foe) {
+    if (phase === "standoff" && calm && tPhase >= 9 && !fadingOut) {
+      // Calm: hold the standoff, then fade on to the next one.
+      fadingOut = true;
+      fade.classList.add("on");
+      phase = "after";
+      tPhase = 3.4;
+    }
+    if (phase === "standoff" && !calm && tPhase >= standoffS && hero && foe) {
       // Same hand-off as the duel: read the hand-on-grip pose, stop the
       // idle clips, then the quick-draw owns both gun arms.
       from.hero = { s: hero.armR.rotation.x, z: hero.armR.rotation.z, e: hero.elbowR.rotation.x };
@@ -470,6 +482,9 @@ function createMenuScene(initialChoice: MapChoice, initialGun: string): MenuScen
     },
     setGun(id) {
       gunId = id; // the next loop's hero carries it
+    },
+    setCalm(c) {
+      calm = c;
     },
     dispose() {
       alive = false;

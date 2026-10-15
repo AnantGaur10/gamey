@@ -6,7 +6,7 @@ import { loadCowboyGlb, swapCowboy, type CowboyGlb } from "../render/cowboyGlb";
 import { loadStreetGlb, type StreetSet } from "../render/streetGlb";
 import { loadMapSet, preloadSet, type MapSet } from "../render/setGlb";
 import { MAPS, MAP_CHOICES, pickMap, mapLabel, isMapChoice, cssSky, type MapId, type MapChoice } from "../render/maps";
-import { foeLookFor, FOE_LOOKS, type FoeLookId } from "../render/foes";
+import { foeLookFor, pickSeriesFoe, FOE_LOOKS, type FoeLookId } from "../render/foes";
 import { createGunsmoke } from "../render/smoke";
 import { createAmbient } from "../render/ambient";
 import { createFixedStepper, STEP, MAX_FRAME_DT } from "../game/fixedStep";
@@ -33,6 +33,8 @@ const BEST_OF = 3; // first to 2
 const FIRST_TO = Math.ceil(BEST_OF / 2);
 // Quick-draw arm path + timings: render/quickDraw.ts (cosmetic, time-based);
 // the fire gate below is the gameplay rule, on the fixed clock.
+/** Revive card: auto "stay down" after this (bots + QA flow through). */
+const REVIVE_WAIT_MS = 4000;
 const DRAW_TICKS = 10; // 0.167s at 60Hz: no shot before the gun clears the holster
 // Last known OS pointer (survives across rounds): a new round's crosshair
 // starts where the mouse really is instead of a guessed screen point.
@@ -285,6 +287,12 @@ export interface SeriesState {
   fWins: number;
   /** The whole series plays on one map (picked at the start). */
   map?: MapId;
+  /** Decided rounds in order (result card pips). */
+  history?: Array<"p" | "f">;
+  /** Gold earned this series (result card). */
+  gold?: number;
+  /** The one opponent of this series (picked at its first duel). */
+  foe?: FoeLookId;
 }
 
 /** Standard Best-of loop entry: full-HP resets, most-rounds-wins. */
@@ -312,6 +320,8 @@ export interface DeathRun {
   hp: number;
   /** This duel's map (a hell round after a double KO stays on it). */
   map?: MapId;
+  /** Gold earned this run (result card). */
+  gold?: number;
 }
 
 const DEATHMATCH_WIN_HEAL = 0.1 * BASE_HP;
@@ -459,9 +469,12 @@ function runDuel(
   player.group.position.copy(stage.player);
   faceToward(player.group, stage.player, stage.foe);
   paintGun(player.gun, gun.id);
-  // Foe look (user 2026-10-12): a new outfit per decided round in a series
-  // (the AI tier follows the same stage), cycling in deathmatch.
-  const foeLook = opts.foe ? FOE_LOOKS[opts.foe] : foeLookFor(mode === "deathmatch" ? "deathmatch" : mode === "tutorial" ? "tutorial" : "standard", stageIdx, run?.streak ?? 0);
+  // Foe look: ONE cowboy for a whole best-of series, a new one per series
+  // (user 2026-10-14; the AI tier still climbs per decided round), cycling
+  // in deathmatch.
+  const foeLook = opts.foe ? FOE_LOOKS[opts.foe]
+    : series ? FOE_LOOKS[series.foe ??= pickSeriesFoe()] // one cowboy for the whole series
+    : foeLookFor(mode === "deathmatch" ? "deathmatch" : "tutorial", run?.streak ?? 0);
   let foe: Cowboy = createCowboy({ ...foeLook.fallback, facing: -1 });
   foe.group.position.copy(stage.foe);
   faceToward(foe.group, stage.foe, stage.player);
@@ -487,8 +500,11 @@ function runDuel(
   // preserves world transforms, so body snapshots stay exact).
   try { bindAccessories(player.group, player.parts); } catch { /* noop */ }
   try { bindAccessories(foe.group, foe.parts); } catch { /* noop */ }
-  let playerDoll: Ragdoll | null = createRagdoll(scene, player.parts, gun.id);
-  let foeDoll: Ragdoll | null = createRagdoll(scene, foe.parts, gun.id);
+  /** Horizontal direction a duelist faces (toward the other): the ragdoll's knee bend plane. */
+  const faceOf = (side: "player" | "foe"): THREE.Vector3 =>
+    (side === "player" ? stage.foe.clone().sub(stage.player) : stage.player.clone().sub(stage.foe)).setY(0).normalize();
+  let playerDoll: Ragdoll | null = createRagdoll(scene, player.parts, gun.id, faceOf("player"));
+  let foeDoll: Ragdoll | null = createRagdoll(scene, foe.parts, gun.id, faceOf("foe"));
   // Hat + coat-tail secondary motion (GLB rigs only; procedural has no pivots).
   let playerSway: Sway | null = null;
   let foeSway: Sway | null = null;
@@ -508,7 +524,7 @@ function runDuel(
       }
       try { bindAccessories(player.group, player.parts); } catch { /* noop */ }
       if (playerDoll) playerDoll.dispose();
-      playerDoll = createRagdoll(scene, player.parts, gun.id);
+      playerDoll = createRagdoll(scene, player.parts, gun.id, faceOf("player"));
     }
   });
   void loadCowboyGlb(`${base}models/${foeLook.glb}`, "O").then((m) => {
@@ -522,7 +538,7 @@ function runDuel(
       }
       try { bindAccessories(foe.group, foe.parts); } catch { /* noop */ }
       if (foeDoll) foeDoll.dispose();
-      foeDoll = createRagdoll(scene, foe.parts, gun.id);
+      foeDoll = createRagdoll(scene, foe.parts, gun.id, faceOf("foe"));
     }
   });
   // Blender street set swaps over the procedural block when ready.
@@ -1101,6 +1117,80 @@ function runDuel(
         if (side === "player") { playerWound = wound; playerWounds = hits; }
         else { foeWound = wound; foeWounds = hits; refreshAimPlane(); }
       },
+      /** Ragdoll lab: `n` deaths of the foe from a wound pose on the live arm
+          pose, each a throwaway doll stepped `secs` on the fixed clock with
+          no rendering (deterministic per trial index), then the corpse's rest
+          stats. The foe's transforms are restored after every trial. `shot`
+          = index of a trial to leave on screen and return as a JPEG (the
+          duel's own render() of the posed corpse, then restored). */
+      ragdollLab: (o: { wound?: WoundPose; n?: number; secs?: number; head?: number; shot?: number; view?: number } = {}) => {
+        const wound = o.wound ?? "none", n = o.n ?? 24, steps = Math.round((o.secs ?? 2.5) * 60);
+        const c = foe, t = WOUND_POSE_TARGET[wound];
+        const saved: Array<[THREE.Object3D, THREE.Vector3, THREE.Quaternion, THREE.Vector3]> = [];
+        c.group.traverse((x) => saved.push([x, x.position.clone(), x.quaternion.clone(), x.scale.clone()]));
+        const restore = (): void => {
+          for (const [x, p, q, s] of saved) { x.position.copy(p); x.quaternion.copy(q); x.scale.copy(s); }
+          c.group.updateMatrixWorld(true);
+        };
+        const shotDir = stage.foe.clone().sub(stage.player).setY(0).normalize();
+        const side = new THREE.Vector3(0, 1, 0).cross(shotDir).normalize();
+        const cap = CAPSULE_FOR_POSE[wound];
+        const rnd = (i: number, k: number): number => { const s = Math.sin(i * 91.7 + k * 37.3) * 43758.5453; return s - Math.floor(s); };
+        const out: Array<Record<string, number | string>> = [];
+        let img: string | null = null;
+        for (let i = 0; i < n; i++) {
+          restore();
+          c.group.rotation.x = t.pitch; c.group.rotation.z = t.roll; c.group.position.y = t.drop;
+          if (c.joints) applyJoints(c, WOUND_JOINTS[wound], 1);
+          stabilizeArm(c, 1, null);
+          c.group.updateMatrixWorld(true);
+          const doll = createRagdoll(scene, c.parts, gun.id, faceOf("foe"));
+          if (!doll) return null;
+          const head = rnd(i, 1) < (o.head ?? 0.5);
+          const y = head ? cap.headY : capsuleMid(cap) + (rnd(i, 2) - 0.5) * 0.5;
+          const point = stage.foe.clone().add(new THREE.Vector3(0, y, 0)).addScaledVector(side, (rnd(i, 3) - 0.5) * (head ? 0.2 : 0.5));
+          const dir = shotDir.clone().addScaledVector(side, (rnd(i, 4) - 0.5) * 0.1).normalize();
+          doll.hit(point, dir, gun.baseDamage / 6);
+          let still = -1;
+          for (let s = 0; s < steps; s++) {
+            const before = doll.bodies!();
+            doll.fixedStep(1 / 60);
+            const after = doll.bodies!();
+            const v = Math.max(...after.map((b, k) => Math.hypot(b[0] - before[k][0], b[1] - before[k][1], b[2] - before[k][2]) * 60));
+            if (v < 0.05 && still < 0) still = s / 60; else if (v >= 0.05) still = -1;
+          }
+          doll.sync(1);
+          c.group.updateMatrixWorld(true);
+          const wy = (x: THREE.Object3D | null | undefined): number => (x ? new THREE.Vector3().setFromMatrixPosition(x.matrixWorld).y : NaN);
+          // Torso uprightness: its local up in world (1 = sitting bolt upright, 0 = lying).
+          const tq = c.parts.torso ? c.parts.torso.getWorldQuaternion(new THREE.Quaternion()) : null;
+          const up = tq ? new THREE.Vector3(0, 1, 0).applyQuaternion(tq).y : NaN;
+          const b = doll.bodies!();
+          const gaps = doll.jointErrors?.() ?? {};
+          out.push({
+            i, head: head ? 1 : 0,
+            pelvis: +wy(c.parts.pelvis).toFixed(2), torso: +b[1][1].toFixed(2), headY: +wy(c.parts.head).toFixed(2),
+            up: +up.toFixed(2), maxY: +Math.max(...b.map((p) => p[1])).toFixed(2),
+            still: +still.toFixed(2), gap: +Math.max(0, ...Object.values(gaps)).toFixed(3),
+            gapAt: Object.entries(gaps).sort((a2, b2) => b2[1] - a2[1])[0]?.[0] ?? "",
+          });
+          if (i === o.shot) {
+            // Camera on the corpse (pelvis), `view` deg around it from the shooter's side.
+            const cp = camera.position.clone(), cq = camera.quaternion.clone();
+            const at = new THREE.Vector3(b[0][0], 0.3, b[0][2]);
+            const a = ((o.view ?? 90) * Math.PI) / 180;
+            camera.position.copy(at).addScaledVector(shotDir, -Math.cos(a) * 3.4).addScaledVector(side, Math.sin(a) * 3.4).setY(1.1);
+            camera.lookAt(at);
+            camera.updateMatrixWorld();
+            render();
+            img = renderer.domElement.toDataURL("image/jpeg", 0.85);
+            camera.position.copy(cp); camera.quaternion.copy(cq); camera.updateMatrixWorld();
+          }
+          doll.dispose();
+        }
+        restore();
+        return { wound, rows: out, img };
+      },
     };
   }
 
@@ -1464,8 +1554,13 @@ function runDuel(
       playerWound = machine.rollWound(playerWounds, playerWound);
       try { (player as unknown as CowboyGlb).playClip?.("flinch"); } catch { /* no-op */ }
     }
-    cross.classList.add("penalty");
-    window.setTimeout(() => cross.classList.remove("penalty"), 220);
+    // Hit flash: the crosshair goes red for a beat. Not at night (user
+    // 2026-10-14): you are usually aiming at the hidden foe, and a red
+    // crosshair sitting on him reads as a marker. The bloom kick stays.
+    if (!nightBlind) {
+      cross.classList.add("penalty");
+      window.setTimeout(() => cross.classList.remove("penalty"), 220);
+    }
     void audio.playSFX("hit-body").catch(() => undefined);
     if (playerHP <= 0) {
       playerDeadAt = performance.now();
@@ -1588,6 +1683,7 @@ function runDuel(
     sub.textContent = subText;
     // Real gold flow (Slice 7): flat win + consolation + kill bonus.
     const prog = adapter.loadProgress();
+    const goldBefore = prog.gold;
     const won = result === "p";
     if (won) {
       prog.gold += (mode === "deathmatch" ? GOLD_WIN_DEATHMATCH : GOLD_WIN_BESTOF) + (killByPlayer ? GOLD_KILL_BONUS : 0);
@@ -1598,6 +1694,8 @@ function runDuel(
       prog.gold += GOLD_LOSS_CONSOLATION;
     }
     adapter.saveProgress(prog);
+    if (series) series.gold = (series.gold ?? 0) + prog.gold - goldBefore;
+    if (run) run.gold = (run.gold ?? 0) + prog.gold - goldBefore;
     // Resolve poses: Blender clip when shipped (the resolve freeze lets it own
     // the arms), procedural gun-skyward fallback for a clipless victor. The
     // victor raises, a surviving loser slumps, a draw slumps both. Never on a
@@ -1650,6 +1748,7 @@ function runDuel(
         // winner takes the point into the series
         if (series) {
           if (result === "p") series.pWins++; else series.fWins++;
+          (series.history ??= []).push(result);
           if (series.pWins >= FIRST_TO || series.fWins >= FIRST_TO) {
             cleanup();
             endSeries(result === "p");
@@ -1668,6 +1767,7 @@ function runDuel(
       if (series) {
         if (result === "p") series.pWins++; else if (result === "f") series.fWins++;
         else { series.roundIndex++; cleanup(); runDuel(root, adapter, mode, audio, series, false, reviveUsed); return; }
+        (series.history ??= []).push(result);
         paintRound();
         if (series.pWins >= FIRST_TO || series.fWins >= FIRST_TO) {
           cleanup();
@@ -1708,31 +1808,76 @@ function runDuel(
     runDuel(root, adapter, mode, audio, undefined, false, reviveUsed, { run: r });
   }
 
-  function endRun(streak: number): void {
+  // Result cards (user 2026-10-14: "this death screen is also very dull"):
+  // over the menu backdrop in calm mode (a standoff, no shots: the hero must
+  // not win behind a DEFEAT), a red / gold veil, big title, the score with a
+  // pip per decided round, gold earned, then REMATCH / HOME. `.menu h1` kept
+  // (tests look for it). Enter = the focused primary button.
+  const pick = (lines: string[]) => lines[Math.floor(Math.random() * lines.length)];
+  function resultCard(o: { won: boolean; kicker: string; title: string; line: string; score: string; gold: number; again: string }): HTMLElement {
     root.innerHTML = "";
     document.body.classList.remove("in-duel");
     document.body.style.background = "";
-    const best = adapter.loadProgress().bestStreak;
-    const s = el(`<div class="menu"><h1>RUN OVER</h1>
-      <div class="note">Deathmatch streak: ${streak} · best ${best}</div>
-      <button class="primary" data-b="again">NEW RUN</button>
-      <button data-b="home">HOME</button></div>`);
+    showMenuScene(mapId, adapter.loadProgress().equippedGun, { calm: true });
+    const total = adapter.loadProgress().gold;
+    const s = el(`<div class="menu result ${o.won ? "win" : "loss"}">
+      <div class="rs-veil"></div>
+      <div class="rs-card">
+        <div class="rs-kicker">${o.kicker}</div>
+        <h1>${o.title}</h1>
+        <div class="rs-line">${o.line}</div>
+        ${o.score}
+        <div class="rs-gold">${COIN_ICON}<b>+${o.gold}</b><span>gold · ${total} total</span></div>
+        <div class="rs-btns">
+          <button class="rs-btn primary" data-b="again">${o.again}</button>
+          <button class="rs-btn" data-b="home">HOME</button>
+        </div>
+      </div>
+    </div>`);
     root.appendChild(s);
-    s.querySelector("[data-b=again]")!.addEventListener("click", () => runDeathmatch(root, adapter, audio));
+    s.querySelector<HTMLButtonElement>("[data-b=again]")!.focus({ preventScroll: true });
     s.querySelector("[data-b=home]")!.addEventListener("click", () => showHome(root, adapter, audio));
+    return s;
+  }
+
+  function endRun(streak: number): void {
+    const best = adapter.loadProgress().bestStreak;
+    const newBest = streak > 0 && streak >= best;
+    const s = resultCard({
+      won: false,
+      kicker: `DEATHMATCH · ${MAPS[mapId].name}`,
+      title: "RUN OVER",
+      line: pick(["Your run ends here, partner.", "The streak is over. The legend isn't.", "Even the fastest gun runs out of road."]),
+      score: `<div class="rs-score">
+          <div class="rs-side"><span>STREAK</span><b>${streak}</b></div>
+          <div class="rs-dash">·</div>
+          <div class="rs-side"><span>BEST</span><b>${best}</b></div>
+        </div>${newBest ? `<div class="rs-new">NEW BEST!</div>` : ""}`,
+      gold: run?.gold ?? 0,
+      again: "NEW RUN",
+    });
+    s.querySelector("[data-b=again]")!.addEventListener("click", () => runDeathmatch(root, adapter, audio));
   }
 
   function endSeries(won: boolean): void {
-    root.innerHTML = "";
-    document.body.classList.remove("in-duel");
-    document.body.style.background = "";
-    const s = el(`<div class="menu"><h1>${won ? "VICTORY!" : "DEFEAT"}</h1>
-      <div class="note">Best of ${BEST_OF} · final ${series?.pWins ?? 0} – ${series?.fWins ?? 0}</div>
-      <button class="primary" data-b="again">REMATCH</button>
-      <button data-b="home">HOME</button></div>`);
-    root.appendChild(s);
+    const pips = (series?.history ?? [])
+      .map((r, i) => `<i class="pip ${r === "p" ? "w" : "l"}" title="Round ${i + 1}">${r === "p" ? "W" : "L"}</i>`).join("");
+    const s = resultCard({
+      won,
+      kicker: `BEST OF ${BEST_OF} · ${MAPS[mapId].name}`,
+      title: won ? "VICTORY!" : "DEFEAT",
+      line: won
+        ? pick(["Fastest gun in the West.", "Smoke clears. You're still standing.", "The town sleeps easy tonight."])
+        : pick(["The dust settles. Not in your favour.", "Too slow on the draw, partner.", "Dust off your hat and draw again."]),
+      score: `<div class="rs-score">
+          <div class="rs-side you"><span>YOU</span><b>${series?.pWins ?? 0}</b></div>
+          <div class="rs-dash">—</div>
+          <div class="rs-side foe"><span>FOE</span><b>${series?.fWins ?? 0}</b></div>
+        </div>${pips ? `<div class="rs-pips">${pips}</div>` : ""}`,
+      gold: series?.gold ?? 0,
+      again: "REMATCH",
+    });
     s.querySelector("[data-b=again]")!.addEventListener("click", () => runSeries(root, adapter, mode, audio));
-    s.querySelector("[data-b=home]")!.addEventListener("click", () => showHome(root, adapter, audio));
   }
 
   function offerRevive(onAccept: () => void, onDecline: () => void): void {
@@ -1741,19 +1886,28 @@ function runDuel(
     const hasToken = p.reviveToken >= 1;
     const canBuy = p.gold >= price;
     if (!hasToken && !canBuy && !adapter.adsEnabled) { onDecline(); return; }
-    const ov = el(`<div class="revive" style="position:absolute;left:50%;top:58%;transform:translate(-50%,-50%);background:rgba(20,10,5,.92);border:2px solid #d4af37;border-radius:12px;padding:16px 20px;color:#ffe9bd;text-align:center;z-index:20;">
-      <div style="font-weight:800;letter-spacing:.1em;">${AID_KIT_ICON}REVIVE? — 1HP, SAME ROUND REST bloomS FRESH</div>
-      <div style="font-size:13px;opacity:.9;margin:6px 0;">${hasToken ? "Use your token (once per game)." : `Emergency buy ${price}g (1.5× shop).`}</div>
-      <div><button data-r="yes">${hasToken ? "USE TOKEN" : `BUY + REVIVE (${price}g)`}</button>
-      ${adapter.adsEnabled ? `<button data-r="ad">WATCH AD INSTEAD</button>` : ``}
-      <button data-r="no">STAY DOWN</button></div>
+    // Revive card (user 2026-10-14 revamp). Every button the same size, font
+    // and colour (CrazyGames: a no-ad choice must match the ad one). The bar
+    // shows the auto "stay down" (bots + QA never click it).
+    const yes = hasToken
+      ? `<button class="rv-btn" data-r="yes">${AID_KIT_ICON}USE TOKEN</button>`
+      : canBuy ? `<button class="rv-btn" data-r="yes">${COIN_ICON}REVIVE · ${price}g</button>` : "";
+    const ov = el(`<div class="revive">
+      <div class="rv-card">
+        <span class="rv-badge">${AID_KIT_ICON}</span>
+        <div class="rv-title">REVIVE?</div>
+        <div class="rv-sub">Get back up with 1 HP: same round, fresh aim.</div>
+        <div class="rv-meta">${hasToken ? "Uses your revive token · once per game" : canBuy ? `No token · emergency price ${price}g · you have ${p.gold}g` : "No token"}</div>
+        <div class="rv-btns">${yes}${adapter.adsEnabled ? `<button class="rv-btn" data-r="ad">WATCH AD</button>` : ""}<button class="rv-btn" data-r="no">STAY DOWN</button></div>
+        <div class="rv-timer"><i style="animation-duration:${REVIVE_WAIT_MS}ms"></i></div>
+      </div>
     </div>`);
     root.appendChild(ov);
     let done = false;
     const finish = (fn: () => void) => { if (done) return; done = true; ov.remove(); fn(); };
     // ai-play never clicks revive: auto-decline so bots + QA flow through.
-    const timer = window.setTimeout(() => finish(onDecline), 4000);
-    ov.querySelector("[data-r=yes]")!.addEventListener("click", () => {
+    const timer = window.setTimeout(() => finish(onDecline), REVIVE_WAIT_MS);
+    ov.querySelector("[data-r=yes]")?.addEventListener("click", () => {
       window.clearTimeout(timer);
       const q = adapter.loadProgress();
       if (hasToken) q.reviveToken = 0;

@@ -42,6 +42,16 @@ export interface RagdollParts {
 // Topple assist: torque (N*m, linearly decaying) on torso+pelvis for this long.
 const TOPPLE_TIME = 0.7;
 const TOPPLE_TORQUE = 9;
+// Slump assist: while the torso still stands more than ~60 deg upright, a
+// torque on the torso alone tips it further the way it already leans, for
+// this long after the hit. A corpse killed kneeling sat up on its pelvis,
+// one knee up as a strut, long after the topple torque had faded.
+const SLUMP_TIME = 2;
+const SLUMP_TORQUE = 10;
+const SLUMP_UP = 0.5;
+
+// Knee-buckle spin (rad/s) on an upright corpse's thighs and shins.
+const LEG_BUCKLE = 3;
 
 const GUN_POWER: Record<string, number> = { default: 9, lifesteal: 7, gold: 7 };
 
@@ -117,16 +127,23 @@ class RagdollJoint extends CANNON.ConeTwistConstraint {
 // origin, so the hinge sits on the real joint). `cone` = max bend (rad) of the
 // child limb away from the parent limb; `twist` = max twist (rad). Unlimited
 // point-to-point joints let limbs fold through impossible angles.
-interface JointSpec { a: keyof RagdollParts; b: keyof RagdollParts; pivot: "mid" | "child"; cone: number; twist: number }
+// `bend`: the cone is centred `bend` rad off the parent limb (+ toward the
+// character's back, - toward the front), so the joint mostly folds one way:
+// from `bend - cone` against the fold to `bend + cone` with it. Knees fold
+// back only; hips, waist and neck fold far forward and a little back.
+// Symmetric cones let a corpse lock into a bridge (head on the dirt, waist
+// bent ~85 deg backwards, thighs swung behind it, shins standing) and rest
+// there with its hips up.
+interface JointSpec { a: keyof RagdollParts; b: keyof RagdollParts; pivot: "mid" | "child"; cone: number; twist: number; bend?: number }
 const JOINTS: JointSpec[] = [
-  { a: "pelvis", b: "torso", pivot: "mid", cone: 1.45, twist: 0.6 },
-  { a: "torso", b: "head", pivot: "mid", cone: 0.9, twist: 0.7 },
+  { a: "pelvis", b: "torso", pivot: "mid", cone: 0.85, twist: 0.6, bend: -0.5 },
+  { a: "torso", b: "head", pivot: "mid", cone: 0.7, twist: 0.7, bend: -0.2 },
   { a: "torso", b: "upperArmL", pivot: "mid", cone: 1.6, twist: 0.8 },
   { a: "torso", b: "upperArmR", pivot: "mid", cone: 1.6, twist: 0.8 },
-  { a: "pelvis", b: "thighL", pivot: "mid", cone: 1.6, twist: 0.6 },
-  { a: "pelvis", b: "thighR", pivot: "mid", cone: 1.6, twist: 0.6 },
-  { a: "thighL", b: "shinL", pivot: "child", cone: 1.5, twist: 1.0 },
-  { a: "thighR", b: "shinR", pivot: "child", cone: 1.5, twist: 1.0 },
+  { a: "pelvis", b: "thighL", pivot: "mid", cone: 1.15, twist: 0.6, bend: -0.8 },
+  { a: "pelvis", b: "thighR", pivot: "mid", cone: 1.15, twist: 0.6, bend: -0.8 },
+  { a: "thighL", b: "shinL", pivot: "child", cone: 1.25, twist: 1.0, bend: 1.2 },
+  { a: "thighR", b: "shinR", pivot: "child", cone: 1.25, twist: 1.0, bend: 1.2 },
   { a: "upperArmR", b: "forearmR", pivot: "child", cone: 1.6, twist: 1.2 },
 ];
 
@@ -141,6 +158,11 @@ interface Part {
       interpolation: rendering must never depend on how many frames fit. */
   prevP: THREE.Vector3; currP: THREE.Vector3;
   prevQ: THREE.Quaternion; currQ: THREE.Quaternion;
+  /** Character's back in the body's local frame (from `facing` at creation,
+      standing), or null when unknown. Fixes the knee's bend plane. */
+  back: CANNON.Vec3 | null;
+  /** Collision box half extents (ground clearance). */
+  half: CANNON.Vec3;
 }
 
 const _v1 = new THREE.Vector3();
@@ -162,6 +184,8 @@ function ownBox(
   all: Set<THREE.Object3D>,
   only?: RegExp,
   skip?: RegExp,
+  /** Clip the box below this local Y (unscaled obj-local units). */
+  minY?: number,
 ): { center: THREE.Vector3; half: THREE.Vector3 } | null {
   obj.updateWorldMatrix(true, true);
   const inv = new THREE.Matrix4().copy(obj.matrixWorld).invert();
@@ -183,6 +207,7 @@ function ownBox(
     for (const c of o.children) visit(c);
   };
   visit(obj);
+  if (minY !== undefined && box.min.y < minY && box.max.y > minY) box.min.y = minY;
   if (!any || box.isEmpty()) return null;
   const center = box.getCenter(new THREE.Vector3()).multiply(sc);
   const half = box.getSize(new THREE.Vector3()).multiply(sc).multiplyScalar(0.5);
@@ -248,6 +273,9 @@ export function createRagdoll(
   _scene: THREE.Scene,
   parts: RagdollParts,
   gunId = "default",
+  /** World direction the character faces (horizontal). Optional: without it
+      knees keep a symmetric cone and legs take the shared topple spin. */
+  facing?: THREE.Vector3,
 ): Ragdoll | null {
   try {
     const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
@@ -291,15 +319,20 @@ export function createRagdoll(
       // The gun rides the forearm part, but its barrel/cylinder/frame would make
       // a long heavy box that tears the elbow joint apart on ground contact
       // (forearm drifted 0.6-0.9m from the shoulder): size from forearm+hand.
+      // The torso box never reaches below the pelvis origin: a long coat
+      // merged into the Torso mesh (the ghost's duster panels) made it a
+      // knee-length pillar that stood the corpse up, sitting on its heels.
+      const minY = key === "torso" && parts.pelvis
+        ? obj.worldToLocal(parts.pelvis.getWorldPosition(new THREE.Vector3())).y
+        : undefined;
       const own = (BODY_MESH_FILTER[key] ? ownBox(obj, partSet, BODY_MESH_FILTER[key]) : null)
-        ?? ownBox(obj, partSet, undefined, BODY_MESH_SKIP[key]);
+        ?? ownBox(obj, partSet, undefined, BODY_MESH_SKIP[key], minY);
       const off = own ? own.center : new THREE.Vector3();
       const hx = Math.max(0.05, own ? own.half.x * 0.75 : 0.1);
       const hy = Math.max(0.05, own ? own.half.y * 0.75 : 0.1);
       const hz = Math.max(0.05, own ? own.half.z * 0.75 : 0.1);
       const body = new CANNON.Body({
         mass,
-        shape: new CANNON.Box(new CANNON.Vec3(hx, hy, hz)),
         type: CANNON.Body.KINEMATIC,
         linearDamping: 0.4,
         angularDamping: 0.35,
@@ -311,16 +344,25 @@ export function createRagdoll(
         collisionFilterGroup: 2 << idx,
         collisionFilterMask: 1,
       });
+      const half = new CANNON.Vec3(hx, hy, hz);
+      body.addShape(new CANNON.Box(half));
       // Body sits on the geometry centre (pivot + rotated offset). Never
       // spawn intersecting the ground plane: a box starting 0.3m deep pops
       // the whole chain skyward when it goes dynamic. Feet stay planted
       // visually — follow() re-seats bodies every frame while alive.
       _v1.add(_v2.copy(off).applyQuaternion(_q1));
-      body.position.set(_v1.x, Math.max(_v1.y, groundClearance(_q1, body.shapes[0] ? (body.shapes[0] as CANNON.Box).halfExtents : new CANNON.Vec3(hx, hy, hz))), _v1.z);
+      body.position.set(_v1.x, Math.max(_v1.y, groundClearance(_q1, half)), _v1.z);
       body.quaternion.set(_q1.x, _q1.y, _q1.z, _q1.w);
       world.addBody(body);
+      // Back in body-local axes, perpendicular to the limb (local Y).
+      let back: CANNON.Vec3 | null = null;
+      if (facing) {
+        const b = body.quaternion.inverse().vmult(new CANNON.Vec3(-facing.x, -facing.y, -facing.z));
+        b.y = 0;
+        if (b.length() > 0.5) back = b.unit();
+      }
       const p: Part = {
-        key, obj, body, off,
+        key, obj, body, off, back, half,
         prevP: new THREE.Vector3(body.position.x, body.position.y, body.position.z), currP: new THREE.Vector3(body.position.x, body.position.y, body.position.z),
         prevQ: new THREE.Quaternion(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w), currQ: new THREE.Quaternion(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w),
       };
@@ -346,6 +388,7 @@ export function createRagdoll(
     // Decaying topple torque (set on hit): with limited joints a corpse can
     // settle kneeling/sitting on its heels; this carries the fall to the dirt.
     let toppleT = 0;
+    let slumpT = 0;
     const toppleAxis = new CANNON.Vec3(0, 0, 0);
     const constraints: CANNON.Constraint[] = [];
 
@@ -358,8 +401,7 @@ export function createRagdoll(
         _v1.add(_v2.copy(p.off).applyQuaternion(_q1));
         // Same above-ground clamp as creation (see above): bodies must be
         // penetration-free on the exact frame they go dynamic.
-        const half = (p.body.shapes[0] as CANNON.Box).halfExtents;
-        p.body.position.set(_v1.x, Math.max(_v1.y, groundClearance(_q1, half)), _v1.z);
+        p.body.position.set(_v1.x, Math.max(_v1.y, groundClearance(_q1, p.half)), _v1.z);
         p.body.quaternion.set(_q1.x, _q1.y, _q1.z, _q1.w);
         p.body.velocity.setZero();
         p.body.angularVelocity.setZero();
@@ -377,10 +419,17 @@ export function createRagdoll(
       follow();
       fallen = true;
       toppleT = TOPPLE_TIME;
+      slumpT = SLUMP_TIME;
       toppleAxis.set(dir.z, 0, -dir.x);
       const p = GUN_POWER[gunId] ?? 8;
       const scale = (power || p) / p;
       const yaw = Math.sin(worldPoint.x * 12.9898 + worldPoint.z * 78.233) * 0.45;
+      // Legs give out: with a known facing, an upright corpse's knees buckle
+      // forward (thighs swing their knees forward, shins tip their tops
+      // forward) while the trunk topples back along the shot. The shared
+      // topple spin alone swung shins back and thighs forward: a reverse
+      // knee bend that kept the legs standing as a pillar.
+      const f = facing ? new THREE.Vector3(facing.x, 0, facing.z).normalize() : null;
       for (const pt of list) {
         pt.body.type = CANNON.Body.DYNAMIC;
         pt.body.wakeUp();
@@ -394,6 +443,13 @@ export function createRagdoll(
         // spinning a random way and cartwheeling (Math.random made every
         // corpse different and chaotic; this is reproducible per hit).
         pt.body.angularVelocity.set(dir.z * 2.2 * scale, yaw, -dir.x * 2.2 * scale);
+        const upright = pt.body.quaternion.vmult(new CANNON.Vec3(0, 1, 0)).y > 0.7;
+        if (f && upright && (pt.key === "thighL" || pt.key === "thighR" || pt.key === "shinL" || pt.key === "shinR")) {
+          // down x forward: swings a hanging limb's lower end forward.
+          const s = (pt.key === "thighL" || pt.key === "thighR" ? 1 : -1) * LEG_BUCKLE * scale;
+          pt.body.angularVelocity.set(-f.z * s, yaw, f.x * s);
+          if (pt.key.startsWith("shin")) pt.body.velocity.y -= 0.6 * scale;
+        }
       }
       // Focal impulse on the body nearest the hit point. cannon-es takes
       // the application point RELATIVE TO THE BODY CENTER (world-oriented),
@@ -434,8 +490,23 @@ export function createRagdoll(
         // limb axis: parent centre -> child centre (fallback straight down)
         const ax = new CANNON.Vec3(b.body.position.x - a.body.position.x, b.body.position.y - a.body.position.y, b.body.position.z - a.body.position.z);
         if (ax.length() < 1e-4) ax.set(0, -1, 0); else ax.normalize();
-        const axA = a.body.quaternion.inverse().vmult(ax);
-        const axB = b.body.quaternion.inverse().vmult(ax);
+        let axA = a.body.quaternion.inverse().vmult(ax);
+        let axB = b.body.quaternion.inverse().vmult(ax);
+        let cone = j.cone;
+        if (j.bend && a.back) {
+          // Limbs run along local Y in both rigs (down for legs, up for the
+          // torso and head): the side of the pivot the child hangs from. The
+          // cone centre leans `bend` off that axis in the parent's frame.
+          // A pose already bent past the range (prone's folded knee) widens
+          // the cone to fit, so no limit starts violated (that tears joints).
+          const pb = b.body.quaternion.inverse().vmult(new CANNON.Vec3(jx - b.body.position.x, jy - b.body.position.y, jz - b.body.position.z));
+          const sy = pb.y > 0 ? -1 : 1;
+          axA = new CANNON.Vec3(a.back.x * Math.sin(j.bend), sy * Math.cos(j.bend), a.back.z * Math.sin(j.bend)).unit();
+          axB = new CANNON.Vec3(0, sy, 0);
+          const wa = a.body.quaternion.vmult(axA), wb = b.body.quaternion.vmult(axB);
+          cone = Math.max(cone, Math.acos(Math.min(1, Math.max(-1, wa.dot(wb)))) + 0.05);
+          ax.copy(wb);
+        }
         const c = new RagdollJoint(a.body, b.body, {
           // cannon pivots are in each body's LOCAL frame (world offsets were
           // only right for upright bodies — a rotated/offset part, like the
@@ -444,7 +515,7 @@ export function createRagdoll(
           pivotB: b.body.quaternion.inverse().vmult(new CANNON.Vec3(jx - b.body.position.x, jy - b.body.position.y, jz - b.body.position.z)),
           axisA: axA,
           axisB: axB,
-          angle: j.cone,
+          angle: cone,
           twistAngle: j.twist,
           collideConnected: false,
         }, ax);
@@ -462,6 +533,22 @@ export function createRagdoll(
           if (t) { t.body.torque.x += toppleAxis.x * k; t.body.torque.z += toppleAxis.z * k; }
         }
         toppleT -= h;
+      }
+      const torso = byKey.get("torso");
+      if (slumpT > 0 && torso) {
+        slumpT -= h;
+        const u = torso.body.quaternion.vmult(new CANNON.Vec3(0, 1, 0));
+        if (u.y > SLUMP_UP) {
+          // Lean = horizontal part of the torso's up; none yet = the shot's way.
+          let lx = u.x, lz = u.z;
+          const l = Math.hypot(lx, lz);
+          if (l < 0.05) { lx = toppleAxis.z * -1; lz = toppleAxis.x; } else { lx /= l; lz /= l; }
+          // up x lean tips the up vector toward the lean.
+          const k = SLUMP_TORQUE * Math.min(1, (u.y - SLUMP_UP) / 0.2);
+          torso.body.torque.x += lz * k;
+          torso.body.torque.z -= lx * k;
+          torso.body.wakeUp();
+        }
       }
       world.step(h);
       for (const pt of list) snap(pt);

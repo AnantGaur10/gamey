@@ -1,8 +1,11 @@
 /* Portal QA requirements: no text selection / double-tap zoom, safe-area aware. */
 * { box-sizing: border-box; }
-/* Western display face for titles + the duel cue. Rye (SIL OFL 1.1, licence
-   in fonts/OFL-Rye.txt), Latin subset, bundled with a relative URL: no
-   external request. swap = system font until it lands, never invisible text. */
+/* Rye: the game's ONE face (user 2026-10-14: titles, HUD, menus, cards).
+   SIL OFL 1.1 (free, commercial use + embedding OK; copyright + licence ship
+   in public/licenses/OFL-Rye.txt -> dist/licenses/), Latin subset, bundled
+   with a relative URL: no external request. swap = fallback serif until it
+   lands, never invisible text. Glyphs outside the subset (▸ ★ ✓ …) fall back
+   per character to Georgia / serif. */
 @font-face {
   font-family: "Rye";
   src: url("./assets/rye-latin.woff") format("woff");
@@ -17,8 +20,12 @@ html, body {
   color: #2b1a10;
   -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none;
   -webkit-touch-callout: none;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: "Rye", Georgia, "Times New Roman", serif;
+  /* Rye has one weight: never fake a bold (smears the inline cut). */
+  font-synthesis: none;
 }
+/* Form controls don't inherit the page font by default. */
+button, input, select, textarea { font-family: inherit; }
 #app { position: fixed; inset: 0; z-index: 1; touch-action: manipulation; }
 /* Live menu backdrop (ui/menuScene.ts): its own fixed layer behind #app, so
    home / shop / map screens keep it running. Canvas fades in once the first
@@ -269,11 +276,148 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 .shop button:active { transform: scale(0.97); }
 .shop .smsg { min-height: 20px; font-size: 14px; color: #ffb08a; }
 .shop .note { font-size: 12px; opacity: 0.8; }
+/* Rye sets taller lines than the old system face: at 800x450 the armory
+   clipped its title and BACK. Short screens tighten it; `safe` + scroll is
+   the last resort, never a cut-off button. */
+.shop { justify-content: safe center; overflow-y: auto; }
+@media (max-height: 620px) {
+  .shop { gap: 6px; padding: 10px 16px; }
+  .shop h2 { font-size: 26px; margin: 0; }
+  .shop > div { font-size: 13px; }
+  .shop button { padding: 7px 12px; font-size: 13px; }
+  .shop .sicon { width: 26px; height: 17px; }
+  .shop .smsg { min-height: 0; font-size: 12px; }
+}
 /* Shop / revive icons: revolver finishes + first aid kit (inline SVG). */
 .sicon { width: 30px; height: 20px; vertical-align: middle; margin-right: 8px; flex: none; }
 /* Menus use the OS cursor (never the duel crosshair). */
 .menu .crosshair, .shop .crosshair { display: none !important; }
-.revive button { cursor: pointer; }
+/* Revive card (user 2026-10-14 revamp): over the finished round. All
+   buttons share one size / font / colour (ad rule: the no-ad choice must
+   match the ad one). The bar drains with the auto "stay down". */
+.revive {
+  position: absolute; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center;
+  padding: 16px; pointer-events: auto; cursor: default;
+  background: radial-gradient(ellipse at 50% 55%, rgba(70, 10, 6, 0.32), rgba(10, 4, 2, 0.72));
+  animation: rvfade 0.25s ease-out both;
+}
+.rv-card {
+  position: relative; width: min(470px, 100%); padding: 38px 24px 16px; text-align: center; color: #ffe9bd;
+  border-radius: 16px; border: 2px solid #d4af37;
+  background: linear-gradient(180deg, rgba(62, 38, 16, 0.97), rgba(24, 13, 5, 0.97));
+  box-shadow: 0 0 0 4px rgba(43, 26, 16, 0.9), 0 18px 50px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 214, 120, 0.35);
+  animation: rvpop 0.35s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+.rv-badge {
+  position: absolute; top: -32px; left: 50%; transform: translateX(-50%);
+  width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(circle at 35% 30%, #5a3a12, #1a0e05); border: 2px solid #d4af37;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+}
+.rv-badge .sicon { width: 40px; height: 30px; margin: 0; }
+.rv-title { font-size: 42px; line-height: 1; letter-spacing: 0.08em; color: #ffd678; text-shadow: 0 3px 0 #4a2c10, 0 6px 16px rgba(0, 0, 0, 0.7); }
+.rv-sub { margin-top: 10px; font-size: 17px; }
+.rv-meta { margin-top: 6px; font-size: 13px; letter-spacing: 0.04em; opacity: 0.75; }
+.rv-btns { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 10px; margin-top: 18px; }
+.rv-btn {
+  display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 50px; padding: 10px 12px;
+  font-size: 17px; letter-spacing: 0.06em; color: #ffe9bd; text-shadow: 0 1px 3px #000; cursor: pointer;
+  border-radius: 10px; border: 2px solid #d4af37; background: linear-gradient(180deg, #5a3a12, #2a170a);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 214, 120, 0.35);
+  transition: filter 0.15s, transform 0.08s;
+}
+.rv-btn:hover, .rv-btn:focus-visible { filter: brightness(1.22); outline: none; }
+.rv-btn:active { transform: scale(0.97); }
+.rv-btn .sicon { width: 26px; height: 20px; margin: 0; }
+.rv-btn > svg:not(.sicon) { width: 22px; height: 22px; flex: none; }
+.rv-timer { margin-top: 14px; height: 4px; border-radius: 2px; overflow: hidden; background: rgba(255, 214, 120, 0.15); }
+.rv-timer i { display: block; height: 100%; background: linear-gradient(90deg, #d4af37, #ffd678); transform-origin: left; animation: rvtimer 4s linear forwards; }
+@keyframes rvtimer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@keyframes rvpop { from { opacity: 0; transform: translateY(12px) scale(0.88); } to { opacity: 1; transform: none; } }
+@keyframes rvfade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Result cards (user 2026-10-14: "death screen ... very dull"): over the
+   calm menu backdrop, gold veil for a win, blood-red for a loss. Scoped to
+   .menu.result (tests read .menu h1). */
+.menu.result { justify-content: center; gap: 0; padding: 16px; }
+.menu.result .rs-veil { position: absolute; inset: 0; pointer-events: none; }
+.menu.result.win .rs-veil { background: radial-gradient(ellipse 70% 75% at 50% 48%, rgba(70, 46, 10, 0.5), rgba(14, 7, 3, 0.88)); }
+.menu.result.loss .rs-veil { background: radial-gradient(ellipse 70% 75% at 50% 48%, rgba(80, 12, 6, 0.55), rgba(10, 3, 2, 0.9)); }
+.menu.result .rs-card {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center;
+  animation: rsin 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.menu.result .rs-kicker {
+  display: flex; align-items: center; gap: 14px;
+  font-size: 14px; letter-spacing: 0.3em; color: rgba(255, 233, 189, 0.75); text-shadow: 0 1px 3px #000;
+}
+.menu.result .rs-kicker::before, .menu.result .rs-kicker::after { content: ""; width: 44px; height: 2px; background: linear-gradient(90deg, rgba(255, 214, 120, 0), #d4af37); }
+.menu.result .rs-kicker::after { transform: scaleX(-1); }
+.menu.result h1 {
+  margin: 0; font-size: 96px; line-height: 1; letter-spacing: 0.08em; text-shadow: none;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 4px 0 #2b1a10) drop-shadow(0 10px 24px rgba(0, 0, 0, 0.75));
+  animation: rsslam 0.55s cubic-bezier(0.2, 1.5, 0.4, 1) both;
+}
+.menu.result.win h1 { background-image: linear-gradient(180deg, #fff3cf 0%, #ffd678 46%, #c38a1c 100%); }
+.menu.result.loss h1 { background-image: linear-gradient(180deg, #ffc3b0 0%, #e0452e 50%, #7a140c 100%); }
+.menu.result .rs-line { font-size: 19px; color: #ffe9bd; text-shadow: 0 2px 6px #000; }
+.menu.result .rs-score { display: flex; align-items: center; gap: 26px; margin-top: 4px; }
+.menu.result .rs-side { display: flex; flex-direction: column; align-items: center; min-width: 90px; }
+.menu.result .rs-side span { font-size: 13px; letter-spacing: 0.3em; color: rgba(255, 233, 189, 0.7); }
+.menu.result .rs-side b { font-size: 64px; line-height: 1; font-weight: 400; color: #ffe9bd; text-shadow: 0 3px 0 #2b1a10, 0 6px 16px rgba(0, 0, 0, 0.7); }
+.menu.result.win .rs-side.you b, .menu.result.loss .rs-side.foe b { color: #ffd678; }
+.menu.result .rs-dash { font-size: 40px; color: rgba(255, 233, 189, 0.5); }
+.menu.result .rs-pips { display: flex; gap: 8px; }
+.menu.result .pip {
+  width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-style: normal; border: 2px solid;
+}
+.menu.result .pip.w { color: #2b1a10; background: #ffd678; border-color: #fff0c0; }
+.menu.result .pip.l { color: #ffe9bd; background: rgba(150, 26, 16, 0.9); border-color: #e0452e; }
+.menu.result .rs-new {
+  padding: 4px 14px; border-radius: 6px; transform: rotate(-4deg);
+  font-size: 18px; letter-spacing: 0.12em; color: #2b1a10; background: linear-gradient(180deg, #fff0c0, #d4af37);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5); animation: rsslam 0.55s 0.25s cubic-bezier(0.2, 1.5, 0.4, 1) both;
+}
+.menu.result .rs-gold {
+  display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px 0 8px; border-radius: 20px;
+  background: rgba(20, 10, 4, 0.62); border: 1px solid rgba(255, 214, 120, 0.45);
+  color: #ffd678; font-size: 18px; text-shadow: 0 1px 3px #000;
+}
+.menu.result .rs-gold svg { width: 26px; height: 26px; }
+.menu.result .rs-gold b { font-weight: 400; }
+.menu.result .rs-gold span { font-size: 14px; color: rgba(255, 233, 189, 0.75); }
+.menu.result .rs-btns { display: flex; gap: 14px; margin-top: 10px; }
+.menu.result .rs-btn {
+  min-width: 210px; padding: 14px 22px; font-size: 21px; letter-spacing: 0.08em; border-radius: 12px;
+  border: 2px solid #d4af37; color: #ffe9bd; text-shadow: 0 1px 3px #000; cursor: pointer;
+  background: linear-gradient(180deg, #4a3010, #241407);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 214, 120, 0.35);
+}
+.menu.result .rs-btn.primary { background: linear-gradient(180deg, #a87418, #5a3510); border-color: #ffe9bd; color: #fff7e0; }
+.menu.result .rs-btn:hover, .menu.result .rs-btn:focus-visible { filter: brightness(1.18); outline: none; box-shadow: 0 4px 20px rgba(212, 175, 55, 0.45), inset 0 1px 0 rgba(255, 214, 120, 0.5); }
+.menu.result .rs-btn:focus { outline: none; }
+@keyframes rsin { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@keyframes rsslam { from { opacity: 0; transform: scale(1.5); } to { opacity: 1; transform: none; } }
+@media (max-height: 620px) {
+  .menu.result .rs-card { gap: 8px; }
+  .menu.result h1 { font-size: 60px; }
+  .menu.result .rs-line { font-size: 15px; }
+  .menu.result .rs-side b { font-size: 42px; }
+  .menu.result .rs-side span { font-size: 11px; }
+  .menu.result .pip { width: 24px; height: 24px; font-size: 12px; }
+  .menu.result .rs-gold { height: 34px; font-size: 15px; }
+  .menu.result .rs-btn { min-width: 160px; padding: 10px 16px; font-size: 17px; }
+  .rv-card { padding: 34px 18px 12px; }
+  .rv-title { font-size: 32px; }
+  .rv-sub { font-size: 15px; margin-top: 6px; }
+  .rv-btns { margin-top: 12px; }
+  .rv-btn { min-height: 44px; font-size: 15px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .menu.result .rs-card, .menu.result h1, .menu.result .rs-new, .rv-card, .revive { animation: none; }
+}
 /* Below the foe HP bar + ammo pips (it used to sit on top of the bar). */
 .skip { position: absolute; top: calc(62px + env(safe-area-inset-top)); right: calc(14px + env(safe-area-inset-right)); pointer-events: auto; }
 .skip button { padding: 7px 12px; border-radius: 8px; border: 1px solid rgba(212, 175, 55, 0.85); background: rgba(36, 20, 7, 0.82); color: #ffe9bd; font-weight: 800; letter-spacing: 0.06em; cursor: pointer; }
@@ -481,7 +625,7 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 .coach em { display: block; font-style: normal; color: #ffb08a; margin-bottom: 3px; }
 .coach kbd, .rules kbd {
   display: inline-block; padding: 0 6px; margin: 0 1px; border: 1px solid #ffe9bd; border-bottom-width: 3px; border-radius: 5px;
-  font: 700 12px/1.45 system-ui, sans-serif; background: rgba(255, 233, 189, 0.12); color: #fff7e8;
+  font-size: 12px; line-height: 1.45; background: rgba(255, 233, 189, 0.12); color: #fff7e8;
 }
 .coach .ico { width: 14px; height: 18px; vertical-align: -4px; color: #ffd678; }
 .rules {

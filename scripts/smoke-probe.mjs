@@ -7,7 +7,7 @@ const errors = [];
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
 page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
 
-await page.goto('http://localhost:5199/basic.html');
+await page.goto(`http://localhost:${process.env.PORT || 5174}/basic.html`);
 await page.waitForTimeout(1500);
 // Fresh profile -> tutorial duel with SKIP button; skip to home, then standard.
 const skip = page.locator('.skip button');

@@ -12,6 +12,10 @@ test('foe corpse coordinates at death', async ({ page }) => {
   // later, so the dump must land fast (same 400ms rule as round advance).
   await page.goto('/basic.html');
   await page.waitForLoadState('networkidle');
+  // Pin the duel to 8m (full damage). Duels roll 6-25m; past ~16m a body hit
+  // does ~27, six shots can't kill, and the round ends on ammo-out instead.
+  await page.waitForFunction(() => !!(window as unknown as { __gamey?: unknown }).__gamey, undefined, { timeout: 8000 });
+  await page.evaluate(() => (window as unknown as { __gamey: { tutorial(f?: string, d?: number): void } }).__gamey.tutorial(undefined, 8));
   await page.waitForSelector('.readyzone', { timeout: 8000 });
   const z = await page.locator('.readyzone').boundingBox();
   await page.mouse.move(z!.x + z!.width / 2, z!.y + z!.height / 2);

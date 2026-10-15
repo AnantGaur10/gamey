@@ -55,11 +55,37 @@ Located in `scripts/`:
 
 ## Test Files
 
+Gates (run before every commit; the dev server must be up on 5174 for everything except `npm test`):
+
+| Gate | What it checks |
+|------|----------------|
+| `npm test` | typecheck + build + 20MB size budget + `test:physics` (pure Node, no browser) |
+| `npx playwright test tests/duel-combat.spec.ts tests/duel-wounds.spec.ts tests/zz-ragdoll-check.spec.ts` | the Playwright gate, all 4 viewport projects (see below) |
+| `HEADLESS=1 npm run ai:play:all` | bot plays a full match at 1920x1080 and 800x450, zero console errors |
+
+Playwright specs (`npx playwright test <file>`; projects desktop-1920, desktop-1366, desktop-1280, mobile-800 in `playwright.config.ts`):
+
 | File | Purpose |
 |------|---------|
-| `tests/manual-play.ts` | Interactive play session (used by `npm run play`) |
-| `tests/interactive-demo.ts` | Step-by-step automated demo with console logs |
-| `tests/visual-duel.spec.ts` | Automated visual tests (desktop + mobile flows + console error check) |
+| `tests/duel-combat.spec.ts` | focus QTE, holster restart, hits both ways, shop buttons, console errors, hell round, quick-draw, crosshair kick |
+| `tests/duel-wounds.spec.ts` | wound lottery, poses vs hit capsules, prone duels, wound reset per round |
+| `tests/zz-ragdoll-check.spec.ts` | foe corpse: parts present, finite, on the ground, joints attached (physics gaps < 0.1m) |
+| `tests/visual-duel.spec.ts` | early desktop/mobile flow + console check; waits for the home menu that a fresh profile skips (tutorial first), stale |
+| `tests/zz-probe2.spec.ts` | joint readout dump (diagnostic, asserts nothing) |
+
+Capture / measurement scripts (`npx tsx <file>` or the npm alias; `HEADLESS=1` to keep windows closed; output in `test-results/`, which Playwright wipes, so run these AFTER specs):
+
+| File | Purpose |
+|------|---------|
+| `tests/ai-play.ts` | `npm run ai:play[:mobile|:all]`: bot plays a match, shots + video |
+| `tests/ai-ragdoll.ts` | `npm run ai:ragdoll[:mobile]`: screencast of foe/player kills + part timelines (`FOE=bandido` etc.) |
+| `tests/ragdoll-lab.ts` | ragdoll rest-pose stats over many deaths per wound pose (`FOE=`, `N=`, `SECS=1.4`, `SHOTS=`) |
+| `tests/ai-wounds.ts` | `npm run ai:wounds[:mobile]`: wound pose frames + head/pelvis heights vs capsules |
+| `tests/ai-stance.ts` | standing-pose close-ups + joint rotations |
+| `tests/physics-refresh.test.ts` | `npm run test:physics`: ragdoll + bullets bit-identical at 30-240Hz |
+| `tests/manual-play.ts` | interactive play session (`npm run play`, headed) |
+| `tests/interactive-demo.ts` / `.js` | step-by-step headed demo with console logs (legacy) |
+| `scripts/smoke-probe.mjs` | one shot fired in a standard duel, two screenshots (`PORT=` overrides 5174) |
 
 ## Environment Variables
 

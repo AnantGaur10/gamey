@@ -19,14 +19,22 @@ export const FOE_LOOKS: Record<FoeLookId, FoeLook> = {
   dandy: { id: "dandy", glb: "cowboy_dandy.glb", fallback: { coat: 0x5b2a86, hat: 0x2a1838, skin: 0xe2a882, accent: 0x2f8a52, moustache: true } },
 };
 
-/** Best-of series: a new opponent per decided round (the AI tier follows
-    the same stage), so a drawn round replays vs the same foe. */
-const SERIES_FOES: FoeLookId[] = ["bandido", "ghost", "dandy"];
+/** Best-of series (user 2026-10-14, replaces a new outfit per round): ONE
+    opponent for the whole series, a different one each series (never the
+    same twice in a row). The AI tier still climbs per decided round. */
+const SERIES_FOES: FoeLookId[] = ["outlaw", "bandido", "ghost", "dandy"];
+let lastSeriesFoe: FoeLookId | null = null;
+export function pickSeriesFoe(): FoeLookId {
+  const pool = SERIES_FOES.filter((f) => f !== lastSeriesFoe);
+  lastSeriesFoe = pool[Math.floor(Math.random() * pool.length)];
+  return lastSeriesFoe;
+}
 /** Deathmatch: the outlaw opens, then the three outfits, looping. */
 const RUN_FOES: FoeLookId[] = ["outlaw", "bandido", "ghost", "dandy"];
 
-export function foeLookFor(mode: "standard" | "deathmatch" | "tutorial", stage: number, streak: number): FoeLook {
+/** Foe outside a best-of series: the tutorial dummy is the outlaw, a
+    deathmatch run cycles the roster (a series carries pickSeriesFoe()). */
+export function foeLookFor(mode: "deathmatch" | "tutorial", streak: number): FoeLook {
   if (mode === "tutorial") return FOE_LOOKS.outlaw;
-  if (mode === "deathmatch") return FOE_LOOKS[RUN_FOES[streak % RUN_FOES.length]];
-  return FOE_LOOKS[SERIES_FOES[Math.max(0, Math.min(SERIES_FOES.length - 1, stage))]];
+  return FOE_LOOKS[RUN_FOES[streak % RUN_FOES.length]];
 }
