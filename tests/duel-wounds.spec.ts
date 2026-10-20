@@ -192,6 +192,11 @@ test.describe('Gamey - Wounds', () => {
 
   test('prone duelists keep fighting both ways (forced prone)', { timeout: 150000 }, async ({ page }) => {
     await startStandard(page);
+    // Pin the duel: ladder level 1 is a deliberately poor shot and at 25m it
+    // can empty its cylinder at a prone player without one hit. 8m, the old
+    // round-1 AI tier (DEV series, no ladder level).
+    await page.evaluate(() => (window as unknown as { __gamey: { round(i: number, d?: number): void } }).__gamey.round(0, 8));
+    await page.waitForSelector('.readyzone', { timeout: 8000 });
     await parkInHolster(page);
     await qteHits(page, 3);
     await waitDraw(page);
@@ -229,7 +234,7 @@ test.describe('Gamey - Wounds', () => {
       .__gamey.force('player', 'prone'));
     await page.waitForFunction(
       () => parseFloat((document.querySelector('.hp.you i') as HTMLElement | null)?.style.width || '100') < 100,
-      { timeout: 20000 },
+      undefined, { timeout: 20000 },
     );
   });
 

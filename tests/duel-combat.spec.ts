@@ -268,9 +268,17 @@ test.describe('Gamey - Combat', () => {
     expect((await state()).hell).toBe(true);
     await parkInHolster(page);
     await waitDraw(page);
+    // Gun clear of the holster on the fixed clock (a click inside DRAW_TICKS
+    // is ignored and left a round in the cylinder: no ammo-out end).
+    await page.waitForFunction(() => {
+      const s = (window as unknown as { __gamey: { gun(x: string): { drawTick: number; tick: number } } }).__gamey.gun('player');
+      return s.drawTick >= 0 && s.tick - s.drawTick >= 30;
+    }, undefined, { timeout: 15000 });
     // Empty the cylinder into the sky; the foe's first landed hit (or all
     // twelve misses) must end it.
-    for (let i = 0; i < 6 && !(await state()).roundOver; i++) {
+    for (let i = 0; i < 10; i++) {
+      const s = await state();
+      if (s.roundOver || s.ammo <= 0) break;
       await page.mouse.click(30, 30);
       await page.waitForTimeout(450);
     }
@@ -316,7 +324,12 @@ test.describe('Gamey - Combat', () => {
     }));
     expect(early.dt).toBeLessThan(10);
     expect(early.ammo1).toBe(early.ammo0);
-    await page.waitForTimeout(600);
+    // 0.6s on the game's fixed clock (a wall-clock wait under-runs it when
+    // software GL frames pass the 0.1s dt clamp); the quick-draw takes 0.3s.
+    await page.waitForFunction(() => {
+      const s = (window as unknown as { __gamey: { gun(x: string): G } }).__gamey.gun('player');
+      return s.drawTick >= 0 && s.tick - s.drawTick >= 36;
+    }, undefined, { timeout: 15000 });
     expect((await gun('player')).state).toBe('hand');
     expect((await gun('foe')).state).toBe('hand');
     // Gun cleared: a click now fires.
@@ -333,21 +346,30 @@ test.describe('Gamey - Combat', () => {
     await page.waitForSelector('.readyzone', { timeout: 8000 }); // fresh profile = tutorial
     await parkInHolster(page);
     await waitDraw(page);
-    await page.waitForTimeout(500); // gun clear of the holster
+    // Waits run on the game's fixed clock, not wall time: headless software
+    // GL at 1920 draws ~5fps and the 0.1s dt clamp then runs the game at about
+    // half speed, so a wall-clock 500ms sometimes left the gun still clearing
+    // (DRAW_TICKS = 10) and the shot was ignored.
     type Q = { bloom: number };
+    type G = { state: string; drawTick: number; tick: number };
+    await page.waitForFunction(() => {
+      const s = (window as unknown as { __gamey: { gun(x: string): G } }).__gamey.gun('player');
+      return s.state === 'hand' && s.drawTick >= 0 && s.tick - s.drawTick >= 30; // gun clear of the holster
+    }, undefined, { timeout: 15000 });
     const r = await page.evaluate(() => {
-      const g = (window as unknown as { __gamey: { qte(): Q } }).__gamey;
+      const g = (window as unknown as { __gamey: { qte(): Q; gun(x: string): G } }).__gamey;
       const gap = () => parseFloat(getComputedStyle(document.querySelector('.crosshair')!).getPropertyValue('--gap') || '0');
       const b0 = g.qte().bloom, gap0 = gap();
       const c = document.querySelector('canvas')!.getBoundingClientRect();
       document.querySelector('canvas')!.dispatchEvent(new PointerEvent('pointerdown', { clientX: c.left + 30, clientY: c.top + 30, bubbles: true, pointerType: 'mouse' }));
-      return { b0, b1: g.qte().bloom, gap0 };
+      return { b0, b1: g.qte().bloom, gap0, tick: g.gun('player').tick };
     });
     expect(r.b1 / r.b0).toBeCloseTo(1.5, 2);
     await page.waitForTimeout(150);
     const gapKick = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.crosshair')!).getPropertyValue('--gap') || '0'));
     expect(gapKick).toBeGreaterThan(r.gap0 * 1.2); // the drawn ring follows
-    await page.waitForTimeout(900);
+    await page.waitForFunction((t0) => // the 0.6s return + margin, on the fixed clock
+      (window as unknown as { __gamey: { gun(x: string): G } }).__gamey.gun('player').tick - t0 >= 54, r.tick, { timeout: 15000 });
     const b2 = await page.evaluate(() => (window as unknown as { __gamey: { qte(): Q } }).__gamey.qte().bloom);
     expect(b2).toBeCloseTo(r.b0, 3); // back on the pre-shot size
   }, { timeout: 60000 });
