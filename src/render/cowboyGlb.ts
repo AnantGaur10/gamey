@@ -47,6 +47,10 @@ function rimLambert(color: THREE.Color | undefined): THREE.MeshLambertMaterial {
   return m;
 }
 
+/** Full-model bbox centre minus the pelvis node (after the PI yaw), measured
+    on the stock cowboy_hero / cowboy_outlaw GLBs: the centring they always had. */
+const PELVIS_TO_CENTRE_Z = { H: 0.344875, O: 0.363359 } as const;
+
 // Parsed GLBs are cached per session and cloned per cowboy (geometry and
 // clips shared, never mutated: paintGun clones before it repaints), so a
 // new round neither re-fetches nor re-parses its two rigs.
@@ -117,13 +121,26 @@ export async function loadCowboyGlb(
     // parent frame, so the bbox must be read after the PI rotation —
     // centering in the unrotated frame doubles the error instead of fixing it.
     // X/Z only — Y stays authored so feet remain grounded.
+    // Measured from the pelvis node (2026-10-19): every outfit shares the
+    // outlaw rig but not its bounds, and a full-bbox centre followed the
+    // clothes (bandido sombrero 13cm, widow brim 6cm, ghost 4cm off the
+    // hitbox along the facing axis; a prone corpse then started propped).
+    // The pelvis + the rig's own offset reproduces the stock hero / outlaw
+    // placement exactly; the bbox stays as the fallback.
     inner.rotation.y = Math.PI;
     inner.updateMatrixWorld(true);
-    const bbox = new THREE.Box3().setFromObject(inner);
-    if (!bbox.isEmpty()) {
-      const center = bbox.getCenter(new THREE.Vector3());
-      inner.position.x -= center.x;
-      inner.position.z -= center.z;
+    const pelvisNode = inner.getObjectByName(`${prefix}_Pelvis`);
+    if (pelvisNode) {
+      const p = pelvisNode.getWorldPosition(new THREE.Vector3());
+      inner.position.x -= p.x;
+      inner.position.z -= p.z + PELVIS_TO_CENTRE_Z[prefix];
+    } else {
+      const bbox = new THREE.Box3().setFromObject(inner);
+      if (!bbox.isEmpty()) {
+        const center = bbox.getCenter(new THREE.Vector3());
+        inner.position.x -= center.x;
+        inner.position.z -= center.z;
+      }
     }
     // Wrap in an `anim` group so idle/victory clips never fight setFall on
     // the outer group (locked Slice-8 seam): anim = performance, outer = death.

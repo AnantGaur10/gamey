@@ -11,6 +11,9 @@ export interface Progress {
   settings: { mute: boolean; quality: "low" | "high"; map?: string };
   /** First-launch tutorial finished or skipped: never forced again. */
   tutorialDone?: boolean;
+  /** Standard-mode ladder (game/levels.ts): the next unbeaten level,
+      0-based; LEVEL_COUNT = all ten cleared. Missing on older saves = 0. */
+  level?: number;
 }
 
 export function defaultProgress(): Progress {

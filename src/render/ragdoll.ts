@@ -80,8 +80,13 @@ const BODY_MESH_FILTER: Partial<Record<keyof RagdollParts, RegExp>> = {
 // The hat and tails still ride their part (bindAccessories); only the
 // collision boxes ignore them (subtrees skipped by node name, incl. pivots).
 const BODY_MESH_SKIP: Partial<Record<keyof RagdollParts, RegExp>> = {
-  head: /_Hat/,
-  torso: /CoatTail/,
+  // Hair / Gear / Skirt: outfit-only meshes (long hair, beards, veils, a
+  // pickaxe on the back, flared skirt halves; scripts/blender/outfits.py)
+  // that must not resize the bodies.
+  head: /_Hat|_Hair/,
+  torso: /CoatTail|_Gear/,
+  thighL: /_Skirt/,
+  thighR: /_Skirt/,
 };
 
 /** ConeTwist whose twist reference is fixed at creation. Stock cannon-es

@@ -46,6 +46,8 @@ interface MenuScene {
   /** Calm = the standoff only, no shots (behind the result cards: the hero
       must not win behind a DEFEAT); loops fade on to the next standoff. */
   setCalm(calm: boolean): void;
+  /** The next standoff's foe (then the roster cycle goes on). */
+  leadFoe(id: FoeLookId): void;
   /** The map the backdrop shows (its set is loaded). */
   mapId(): MapId;
   dispose(): void;
@@ -58,16 +60,18 @@ export function menuMapId(): MapId | null {
   return live?.mapId() ?? null;
 }
 
-/** Start (or retarget) the menu backdrop. Idempotent across menu screens. */
-export function showMenuScene(choice: MapChoice, gunId: string, opts: { calm?: boolean } = {}): void {
+/** Start (or retarget) the menu backdrop. Idempotent across menu screens.
+    `foe`: who stands in the next standoff (home: the next ladder foe). */
+export function showMenuScene(choice: MapChoice, gunId: string, opts: { calm?: boolean; foe?: FoeLookId } = {}): void {
   if (live) {
+    if (opts.foe) live.leadFoe(opts.foe);
     live.setMap(choice);
     live.setGun(gunId);
     live.setCalm(!!opts.calm);
     return;
   }
   try {
-    live = createMenuScene(choice, gunId, !!opts.calm);
+    live = createMenuScene(choice, gunId, !!opts.calm, opts.foe ?? null);
   } catch (err) {
     if (import.meta.env.DEV) console.warn("[gamey] menu backdrop failed", err);
     live = null;
@@ -103,7 +107,7 @@ function disposeCowboy(c: Cowboy | null, scene: THREE.Scene): void {
   c.group.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
 }
 
-function createMenuScene(initialChoice: MapChoice, initialGun: string, initialCalm: boolean): MenuScene {
+function createMenuScene(initialChoice: MapChoice, initialGun: string, initialCalm: boolean, initialFoe: FoeLookId | null): MenuScene {
   const host = hostEl();
   host.replaceChildren();
   host.classList.add("loading");
@@ -174,6 +178,7 @@ function createMenuScene(initialChoice: MapChoice, initialGun: string, initialCa
   let mapId: MapId = choice === "random" ? order[0] : choice;
   let loop = 0;
   let foeIdx = Math.floor(Math.random() * FOES.length);
+  let lead: FoeLookId | null = initialFoe; // next standoff's foe, then the cycle
 
   let hero: Cowboy | null = null;
   let foe: Cowboy | null = null;
@@ -229,8 +234,9 @@ function createMenuScene(initialChoice: MapChoice, initialGun: string, initialCa
     }
     const def = MAPS[mapId];
     const stage = loop % 2 === 0 ? 1 : 0; // dusk first, then noon, ...
-    foeIdx = (foeIdx + 1) % FOES.length;
-    const look = FOE_LOOKS[FOES[foeIdx]];
+    if (!lead) foeIdx = (foeIdx + 1) % FOES.length;
+    const look = FOE_LOOKS[lead ?? FOES[foeIdx]];
+    lead = null;
     const gid = gunId;
     const [set, heroGlb, foeGlb] = await Promise.all([
       loadSet(mapId),
@@ -510,6 +516,9 @@ function createMenuScene(initialChoice: MapChoice, initialGun: string, initialCa
     },
     setCalm(c) {
       calm = c;
+    },
+    leadFoe(id) {
+      lead = id;
     },
     mapId: () => mapId,
     dispose() {

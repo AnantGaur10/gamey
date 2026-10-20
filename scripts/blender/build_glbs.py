@@ -255,7 +255,12 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import glb_util
 KEEP = ("Pelvis", "Torso", "Head", "Waist", "Sleeve_L", "Cuff_L", "Leg_L", "Leg_R", "Knee_L", "Knee_R",
-        "Shin_L", "Shin_R", "armR", "elbowR", "Gun", "GunHolster", "gunTip", "Top", "CoatTail_L", "CoatTail_R")
+        "Shin_L", "Shin_R", "armR", "elbowR", "Gun", "GunHolster", "gunTip", "Top", "CoatTail_L", "CoatTail_R",
+        # Outfit-only (outfits.py, 2026-10-19 ladder foes): hair / beard / veil
+        # under Head, props + long hair under Torso, skirt halves under the
+        # thighs, kept apart so the ragdoll can leave them out of its head /
+        # torso / thigh boxes. Absent on the hero / outlaw (output unchanged).
+        "Hair", "Gear", "Skirt_L", "Skirt_R")
 HAT = ("Brim", "Band", "Dent")            # join the crown (Top), renamed {P}_Hat
 # Empty KEEP nodes take their geometry on this direct child (its name keeps
 # the ragdoll's /fore|hand/ forearm filter working for elbowR).
