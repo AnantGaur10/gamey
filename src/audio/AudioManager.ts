@@ -58,14 +58,24 @@ export function createAudioManager(): AudioManager {
   // Music files land in Phase 3 (tail); until then HEAD-probe first so a
   // missing file is a silent skip, never a console 404 (QA noise). URL is
   // BASE_URL-relative (relative-paths-only portal rule — never absolute).
-  async function resolveMusicUrl(filename: string): Promise<string | null> {
-    try {
-      const url = `${import.meta.env.BASE_URL}assets/music/${filename}`;
-      const res = await fetch(url, { method: "HEAD" });
-      return res.ok ? url : null;
-    } catch {
-      return null;
+  // One probe per file per session (was one per play: a HEAD request on
+  // every hit, a wasted round trip each on slow mobile data).
+  const probed = new Map<string, Promise<string | null>>();
+  function resolveMusicUrl(filename: string): Promise<string | null> {
+    let p = probed.get(filename);
+    if (!p) {
+      p = (async () => {
+        try {
+          const url = `${import.meta.env.BASE_URL}assets/music/${filename}`;
+          const res = await fetch(url, { method: "HEAD" });
+          return res.ok ? url : null;
+        } catch {
+          return null;
+        }
+      })();
+      probed.set(filename, p);
     }
+    return p;
   }
 
   async function loadMusicTrack(track: MusicTrack): Promise<HTMLAudioElement | null> {

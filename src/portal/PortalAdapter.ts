@@ -26,6 +26,12 @@ export function defaultProgress(): Progress {
   };
 }
 
+/** Device class as the portal reports it (ua-parser names, e.g. os "iOS"). */
+export interface DeviceInfo {
+  type: "desktop" | "tablet" | "mobile";
+  os: string;
+}
+
 export interface PortalAdapter {
   /** "sdk" = CrazyGames SDK live, "none" = no SDK (load failed / ?nosdk / other site). */
   readonly kind: "sdk" | "none";
@@ -46,4 +52,7 @@ export interface PortalAdapter {
   loadProgress(): Progress;
   saveProgress(p: Progress): void;
   getUser(): { id: string | null; name: string | null };
+  /** CrazyGames SDK `user.systemInfo` (technical spec: use it for device-
+      specific experience, not our own UA sniffing). Null without the SDK. */
+  deviceInfo(): DeviceInfo | null;
 }

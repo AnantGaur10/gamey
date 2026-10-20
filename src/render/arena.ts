@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { createPost, type Grade } from "./post";
+import { deviceTier } from "./device";
+import { keepTexture, pinPrograms, releaseScene } from "./gpu";
 
 // Flat-styled 3D: orthographic camera (exact flat-vector feel),
 // unlit-leaning lights, CSS gradient sky behind a transparent canvas,
@@ -94,6 +96,30 @@ export const HELL: TimeOfDay = {
   rim: { color: 0xff5020, strength: 0.2 },
 };
 
+// One WebGL context for the whole session (2026-10-15, low-end pass). A new
+// context per round recompiled every shader and re-uploaded every buffer at
+// each round start (~0.4s of the first frame on a 4x-throttled CPU), and
+// context churn is what crashes old iPhones. Only one arena (menu backdrop or
+// duel) is alive at a time; its release() frees what its scene uploaded and
+// keeps the session caches (keepOnGpu) and the compiled programs.
+let sharedRenderer: THREE.WebGLRenderer | null = null;
+function acquireRenderer(): THREE.WebGLRenderer {
+  if (sharedRenderer && !sharedRenderer.getContext().isContextLost()) return sharedRenderer;
+  try { sharedRenderer?.dispose(); } catch { /* lost context: start over */ }
+  // No MSAA (user 2026-10-06: too expensive on low-end): FXAA in the post
+  // chain instead. Opaque: the sky is in the scene so the grade covers it.
+  const r = new THREE.WebGLRenderer({ antialias: false, alpha: false });
+  r.setClearColor(0x000000, 1);
+  // Shader error checks read the compile/link logs right after each new
+  // program, which stalls until the driver finishes it (a hitch at every
+  // round start on weak GPUs). DEV keeps them so a broken shader still shouts.
+  r.debug.checkShaderErrors = import.meta.env.DEV;
+  // One frame = scene + 2 post passes; reset per frame so info() sums them.
+  r.info.autoReset = false;
+  sharedRenderer = r;
+  return r;
+}
+
 // HiDPI: render at device pixels (capped) so phones/retina aren't upscaled
 // blurry. The cap only ever drops (frame-time watchdog in noteFrame) and is
 // module-level so a slow device stays at 1x for every later duel.
@@ -149,6 +175,7 @@ function shadowTexture(): THREE.CanvasTexture {
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
   shadowTex = tex;
+  keepTexture(tex);
   return tex;
 }
 
@@ -251,6 +278,7 @@ function dirtDetailTexture(): THREE.CanvasTexture {
   tex.colorSpace = THREE.NoColorSpace; // data, not colour
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   dirtTex = tex;
+  keepTexture(tex);
   return tex;
 }
 
@@ -400,7 +428,14 @@ export function createArena(distM: number): {
   /** Draw one frame: scene -> grade/tone map -> FXAA (or direct if the post
       chain failed). */
   render(): void;
-  disposePost(): void;
+  /** Arena over: free what its scene uploaded; the shared renderer, its
+      compiled programs and the session caches stay for the next arena. */
+  release(): void;
+  /** Compile `obj`'s shaders (lit by this scene) without blocking the main
+      thread (KHR_parallel_shader_compile); resolves at once when nothing new
+      had to compile. Add late arrivals (GLB sets) only after it resolves,
+      or their first frame stalls on the compile. Never rejects. */
+  prepare(obj: THREE.Object3D): Promise<void>;
   /** World metres per CSS px at a world point (perspective: depth-dependent). */
   worldPerPxAt(p: THREE.Vector3): number;
   setTimeOfDay(t: TimeOfDay): void;
@@ -411,10 +446,11 @@ export function createArena(distM: number): {
   setProneFrame(k: number): void;
   /** Map sets (render/maps.ts): repaint/hide the arena floor under them. */
   setFloor(f: ArenaFloorLook): void;
+  /** Build the procedural Main Street (idempotent): only when it will show. */
+  buildProceduralStreet(): void;
 } {
   const scene = new THREE.Scene();
   scene.fog = new THREE.FogExp2(NOON.fogColor, NOON.fogDensity);
-  const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
 
   // Right-shoulder perspective 3rd person (user ask 2026-10-05, replaces the
   // ortho over-shoulder): the camera rides behind + right of the player's
@@ -439,12 +475,9 @@ export function createArena(distM: number): {
   camera.lookAt(camLook);
   const camBase = camera.position.clone();
 
-  // No MSAA (user 2026-10-06: too expensive on low-end): FXAA in the post
-  // chain instead. Opaque: the sky is in the scene so the grade covers it.
-  const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
-  renderer.setClearColor(0x000000, 1);
-  // One frame = scene + 2 post passes; reset per frame so info() sums them.
-  renderer.info.autoReset = false;
+  const renderer = acquireRenderer();
+  renderer.toneMapping = THREE.NoToneMapping; // the post pass tone maps (goDirect below otherwise)
+  renderer.setRenderTarget(null);
   let post = postOff ? null : createPost(renderer);
   // Direct path (post failed or the watchdog dropped it): built-in materials
   // tone map themselves; no FXAA, no tint/saturation grade.
@@ -520,297 +553,306 @@ export function createArena(distM: number): {
     floor.add(m);
   }
 
-  // Frontier main street (ref: specs/references/cboysaloon.jpeg): wood row
-  // left, cream restaurant + gray stone right, red false-front closing the
-  // vista, boardwalks, corral fence + wagon wheel foreground. Procedural
-  // boxes only — zero shipped bytes; signs are runtime canvas textures.
-  // Street-local axes: +z faces the duel/camera, x runs across the street.
-  {
-    const mid = pPos.clone().lerp(fPos, 0.5);
-    const street = new THREE.Group();
-    street.name = "ProceduralStreet"; // hidden when the Blender street GLB lands
-    street.position.copy(mid).addScaledVector(duelDir, mid.distanceTo(fPos) + 9.5);
-    street.rotation.y = Math.atan2(-duelDir.x, -duelDir.z); // local +z faces the duel
-    const lam = (c: number) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
-    const glow = (c: number) => new THREE.MeshBasicMaterial({ color: c, fog: false });
-    const wood = lam(0x9a7a52); // sun-bleached siding
-    const darkWood = lam(0x6e4f30);
-    const walkMat = lam(0xb08c5a);
-    const cream = lam(0xe9dcc2);
-    const stone = lam(0x8f9299);
-    const brickRed = lam(0xa8503c);
-    // Box helper: mesh built, placed (optionally rotated), parented.
-    function B(parent: THREE.Object3D, w: number, h: number, d: number, m: THREE.Material, x: number, y: number, z: number, ry = 0, rz = 0, rx = 0): THREE.Mesh {
-      const ms = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
-      ms.position.set(x, y, z);
-      ms.rotation.set(rx, ry, rz);
-      parent.add(ms);
-      return ms;
-    }
-    function textTex(text: string, fg: string): THREE.CanvasTexture {
-      const cv = document.createElement("canvas");
-      cv.width = 512;
-      cv.height = 96;
-      const g = cv.getContext("2d")!;
-      g.clearRect(0, 0, 512, 96);
-      g.font = "bold 64px Georgia, serif";
-      g.textAlign = "center";
-      g.textBaseline = "middle";
-      g.fillStyle = fg;
-      g.fillText(text, 256, 52);
-      const tx = new THREE.CanvasTexture(cv);
-      tx.colorSpace = THREE.SRGBColorSpace;
-      return tx;
-    }
-    function signBoard(parent: THREE.Object3D, text: string, fg: string, bg: THREE.Material, w: number, x: number, y: number, z: number): void {
-      B(parent, w, 1.0, 0.22, bg, x, y, z);
-      const p = new THREE.Mesh(
-        new THREE.PlaneGeometry(w - 0.4, 0.85),
-        new THREE.MeshBasicMaterial({ map: textTex(text, fg), transparent: true, fog: false }),
-      );
-      p.position.set(x, y, z + 0.13);
-      parent.add(p);
-    }
-    // Window unit: dark frame, warm pane, side shutters, sill.
-    function windowUnit(parent: THREE.Object3D, x: number, y: number, z: number, shutter: THREE.Material | null): void {
-      B(parent, 1.5, 1.7, 0.08, darkWood, x, y, z);
-      const pane = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 1.5), glow(0xffd98a));
-      pane.position.set(x, y, z + 0.06);
-      parent.add(pane);
-      B(parent, 1.5, 0.1, 0.14, darkWood, x, y - 0.9, z + 0.02); // sill
-      if (shutter) {
-        B(parent, 0.5, 1.7, 0.06, shutter, x - 1.0, y, z + 0.02);
-        B(parent, 0.5, 1.7, 0.06, shutter, x + 1.0, y, z + 0.02);
+  // Procedural street + dressing: the zero-byte stand-in for Main Street,
+  // built only when it shows (the street GLB is not loaded yet, or failed).
+  // Other maps and a cached street never pay for it: dozens of meshes, canvas
+  // sign textures and their shaders per round (2026-10-15 low-end pass).
+  let proceduralBuilt = false;
+  function buildProceduralStreet(): void {
+    if (proceduralBuilt) return;
+    proceduralBuilt = true;
+    // Frontier main street (ref: specs/references/cboysaloon.jpeg): wood row
+    // left, cream restaurant + gray stone right, red false-front closing the
+    // vista, boardwalks, corral fence + wagon wheel foreground. Procedural
+    // boxes only — zero shipped bytes; signs are runtime canvas textures.
+    // Street-local axes: +z faces the duel/camera, x runs across the street.
+    {
+      const mid = pPos.clone().lerp(fPos, 0.5);
+      const street = new THREE.Group();
+      street.name = "ProceduralStreet"; // hidden when the Blender street GLB lands
+      street.position.copy(mid).addScaledVector(duelDir, mid.distanceTo(fPos) + 9.5);
+      street.rotation.y = Math.atan2(-duelDir.x, -duelDir.z); // local +z faces the duel
+      const lam = (c: number) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
+      const glow = (c: number) => new THREE.MeshBasicMaterial({ color: c, fog: false });
+      const wood = lam(0x9a7a52); // sun-bleached siding
+      const darkWood = lam(0x6e4f30);
+      const walkMat = lam(0xb08c5a);
+      const cream = lam(0xe9dcc2);
+      const stone = lam(0x8f9299);
+      const brickRed = lam(0xa8503c);
+      // Box helper: mesh built, placed (optionally rotated), parented.
+      function B(parent: THREE.Object3D, w: number, h: number, d: number, m: THREE.Material, x: number, y: number, z: number, ry = 0, rz = 0, rx = 0): THREE.Mesh {
+        const ms = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+        ms.position.set(x, y, z);
+        ms.rotation.set(rx, ry, rz);
+        parent.add(ms);
+        return ms;
       }
-    }
-
-    // LEFT ROW (weathered wood, like the ref's left side).
-    const leftRow = new THREE.Group();
-    leftRow.position.set(-6.5, 0, 0);
-    street.add(leftRow);
-    // Saloon: false front + porch + batwing doors + signs.
-    B(leftRow, 9, 5, 1, wood, 0, 2.5, 0);
-    B(leftRow, 9, 1.8, 0.6, darkWood, 0, 5.6, 0.2); // false-front parapet
-    B(leftRow, 9, 0.22, 3.0, darkWood, 0, 3.2, 2.0); // porch roof
-    for (const px of [-3.8, -1.3, 1.3, 3.8]) {
-      B(leftRow, 0.26, 3.1, 0.26, darkWood, px, 1.55, 3.2, 0, (px > 0 ? 1 : -1) * 0.02);
-    }
-    windowUnit(leftRow, -2.6, 2.3, 0.52, lam(0x4a6a4a));
-    windowUnit(leftRow, 2.6, 2.3, 0.52, lam(0x4a6a4a));
-    const rec = new THREE.Mesh(new THREE.PlaneGeometry(1.9, 2.7), new THREE.MeshBasicMaterial({ color: 0x20140c }));
-    rec.position.set(0, 1.45, 0.53);
-    leftRow.add(rec);
-    B(leftRow, 0.8, 1.1, 0.06, darkWood, -0.44, 1.0, 0.58);
-    B(leftRow, 0.8, 1.1, 0.06, darkWood, 0.44, 1.0, 0.58);
-    signBoard(leftRow, "SALOON", "#f7e3ac", darkWood, 6, 0, 4.35, 0.75);
-    B(leftRow, 0.12, 0.12, 1.4, darkWood, 1.8, 3.0, 1.1); // blade-sign bracket
-    B(leftRow, 1.5, 0.9, 0.1, wood, 1.8, 2.4, 1.7); // hanging blade sign
-    // Two-story neighbor with balcony (ref's left balcony).
-    const lodge = new THREE.Group();
-    lodge.position.set(0, 0, -9.5);
-    leftRow.add(lodge);
-    B(lodge, 8, 6.5, 1, lam(0x7d6a52), 0, 3.25, 0);
-    B(lodge, 8, 0.5, 1.2, darkWood, 0, 6.6, 0); // cornice
-    B(lodge, 8, 0.25, 2.2, darkWood, 0, 3.35, 1.4); // balcony floor
-    B(lodge, 8, 0.12, 0.12, darkWood, 0, 4.25, 2.4); // balcony rail
-    for (let i = -3; i <= 3; i++) B(lodge, 0.09, 0.85, 0.09, darkWood, i * 1.05, 3.82, 2.4);
-    B(lodge, 0.24, 3.2, 0.24, darkWood, -3.4, 1.6, 2.2);
-    B(lodge, 0.24, 3.2, 0.24, darkWood, 3.4, 1.6, 2.2);
-    windowUnit(lodge, -2, 1.9, 0.52, lam(0x8a4a3a));
-    const dlodge = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 2.5), new THREE.MeshBasicMaterial({ color: 0x2a1c10 }));
-    dlodge.position.set(1.8, 1.25, 0.53);
-    lodge.add(dlodge);
-    windowUnit(lodge, -2, 5.0, 0.52, null);
-    windowUnit(lodge, 2, 5.0, 0.52, null);
-    // Boardwalk spanning the row + steps + barrels.
-    B(leftRow, 3.2, 0.35, 20, walkMat, 0, 0.175, -1.5);
-    B(leftRow, 3.2, 0.18, 1.2, walkMat, 0, 0.09, 9.0);
-    B(leftRow, 3.2, 0.18, 1.2, walkMat, 0, 0.09, -12.0);
-    for (const [bx, bz] of [[-1.1, 8.2], [0.1, 8.6]] as const) {
-      const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.38, 0.9, 12), wood);
-      bar.position.set(bx, 0.45, bz);
-      leftRow.add(bar);
-      B(leftRow, 0.72, 0.06, 0.72, darkWood, bx, 0.25, bz);
-      B(leftRow, 0.72, 0.06, 0.72, darkWood, bx, 0.68, bz);
-    }
-
-    // RIGHT ROW (cream restaurant + gray stone, like the ref's right side).
-    const rightRow = new THREE.Group();
-    rightRow.position.set(6.5, 0, 0);
-    street.add(rightRow);
-    B(rightRow, 10, 5, 1, cream, 0, 2.5, 0);
-    B(rightRow, 10, 0.9, 0.7, cream, 0, 5.3, 0.1); // parapet cap
-    B(rightRow, 10, 0.16, 3.4, lam(0x9a8a68), 0, 3.35, 2.0, 0, 0, 0.1); // slanted awning
-    for (const px of [-4.2, -1.4, 1.4, 4.2]) B(rightRow, 0.24, 3.2, 0.24, darkWood, px, 1.6, 3.4);
-    signBoard(rightRow, "RESTAURANT", "#f2e6c4", lam(0x2e5d3a), 7, 0, 4.35, 0.65);
-    windowUnit(rightRow, -3.2, 2.2, 0.52, null);
-    windowUnit(rightRow, -1.1, 2.2, 0.52, null);
-    windowUnit(rightRow, 3.2, 2.2, 0.52, null);
-    const rdoor = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 2.5), new THREE.MeshBasicMaterial({ color: 0x3a2a1a }));
-    rdoor.position.set(1.1, 1.25, 0.53);
-    rightRow.add(rdoor);
-    // Gray stone 2-story.
-    const stone2 = new THREE.Group();
-    stone2.position.set(0, 0, -10);
-    rightRow.add(stone2);
-    B(stone2, 8, 6.5, 1, stone, 0, 3.25, 0);
-    B(stone2, 8.4, 0.4, 1.3, lam(0x6a6d75), 0, 6.6, 0); // cornice
-    windowUnit(stone2, -2, 1.9, 0.52, null);
-    windowUnit(stone2, 2, 1.9, 0.52, null);
-    windowUnit(stone2, -2, 5.0, 0.52, null);
-    windowUnit(stone2, 2, 5.0, 0.52, null);
-    const sdoor = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 2.5), new THREE.MeshBasicMaterial({ color: 0x2a2d33 }));
-    sdoor.position.set(0, 1.25, 0.53);
-    stone2.add(sdoor);
-    B(rightRow, 3.2, 0.35, 20, walkMat, 0, 0.175, -2.5); // boardwalk
-    B(rightRow, 3.2, 0.18, 1.2, walkMat, 0, 0.09, 8.0);
-    // End of street: faded-red false front closes the vista (ref's red block).
-    const end = new THREE.Group();
-    end.position.set(0, 0, -16);
-    street.add(end);
-    B(end, 12, 5.5, 1, brickRed, 0, 2.75, 0);
-    B(end, 12, 1.6, 0.7, lam(0x7e3a2c), 0, 6.1, 0.1);
-    signBoard(end, "BANK", "#f2e6c4", lam(0x7e3a2c), 5, 0, 4.6, 0.65);
-    windowUnit(end, -3.5, 2.6, 0.52, null);
-    windowUnit(end, 3.5, 2.6, 0.52, null);
-    const edoor = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 2.8), new THREE.MeshBasicMaterial({ color: 0x2a1a10 }));
-    edoor.position.set(0, 1.4, 0.53);
-    end.add(edoor);
-    // Corral fence + wagon wheel, foreground right (ref's right fence).
-    const corral = new THREE.Group();
-    corral.position.set(4.6, 0, 10.5);
-    street.add(corral);
-    for (const px of [-2.4, 0, 2.4]) B(corral, 0.22, 1.25, 0.22, darkWood, px, 0.62, 0);
-    B(corral, 5.4, 0.16, 0.16, darkWood, 0, 1.1, 0);
-    B(corral, 5.4, 0.16, 0.16, darkWood, 0, 0.62, 0);
-    const wheel = new THREE.Group();
-    wheel.position.set(3.4, 0.6, 0.4);
-    wheel.rotation.set(0.22, 0.45, 0);
-    corral.add(wheel);
-    wheel.add(new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.07, 8, 20), darkWood));
-    for (let i = 0; i < 8; i++) {
-      const sp = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.0, 6), wood);
-      sp.rotation.z = (i / 8) * Math.PI * 2;
-      wheel.add(sp);
-    }
-    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.16, 8), darkWood);
-    hub.rotation.x = Math.PI / 2;
-    wheel.add(hub);
-
-    scene.add(street);
-  }
-
-  // Dressing: depth + life for zero shipped bytes (all procedural boxes).
-  // Buildings sit ~12-14m past mid; keep new props clear of the duel line.
-  // Grouped as "ProceduralDressing": hidden with the street when the Blender
-  // set (which carries its own props + lamps) lands.
-  {
-    const dressing = new THREE.Group();
-    dressing.name = "ProceduralDressing";
-    scene.add(dressing);
-    const mid = pPos.clone().lerp(fPos, 0.5);
-    const perp = new THREE.Vector3(-duelDir.z, 0, duelDir.x);
-    const lam2 = (c: number) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
-    const basic = (c: number, fog = true) => new THREE.MeshBasicMaterial({ color: c, fog });
-    // Distant mesas (haze silhouettes past the street).
-    const mesaMat = lam2(0xb98a63);
-    const mesaCap = lam2(0x8f5f43);
-    for (const [sx, dd, w, h] of [[-14, 26, 10, 4], [6, 34, 14, 6], [22, 28, 8, 3]] as const) {
-      const mesa = new THREE.Mesh(new THREE.BoxGeometry(w, h, 3), mesaMat);
-      mesa.position.copy(mid).addScaledVector(duelDir, dd).addScaledVector(perp, sx);
-      mesa.position.y = h / 2 - 0.2;
-      dressing.add(mesa);
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(w * 0.7, h * 0.35, 3.2), mesaCap);
-      cap.position.copy(mesa.position);
-      cap.position.y += h * 0.55;
-      dressing.add(cap);
-    }
-    // Clouds: flat-shaded puffs high past the street.
-    const cloudMat = basic(0xfdf6e8);
-    for (const [sx, dd, y] of [[-10, 20, 16], [8, 26, 20], [0, 30, 24]] as const) {
-      const cl = new THREE.Group();
-      for (let k = 0; k < 3; k++) {
-        const puff = new THREE.Mesh(new THREE.SphereGeometry(1.6 - k * 0.3, 7, 5), cloudMat);
-        puff.position.set(k * 1.8 - 1.8, (k % 2) * 0.5, 0);
-        puff.scale.y = 0.55;
-        cl.add(puff);
+      function textTex(text: string, fg: string): THREE.CanvasTexture {
+        const cv = document.createElement("canvas");
+        cv.width = 512;
+        cv.height = 96;
+        const g = cv.getContext("2d")!;
+        g.clearRect(0, 0, 512, 96);
+        g.font = "bold 64px Georgia, serif";
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.fillStyle = fg;
+        g.fillText(text, 256, 52);
+        const tx = new THREE.CanvasTexture(cv);
+        tx.colorSpace = THREE.SRGBColorSpace;
+        return tx;
       }
-      cl.position.copy(mid).addScaledVector(duelDir, dd).addScaledVector(perp, sx);
-      cl.position.y = y;
-      dressing.add(cl);
+      function signBoard(parent: THREE.Object3D, text: string, fg: string, bg: THREE.Material, w: number, x: number, y: number, z: number): void {
+        B(parent, w, 1.0, 0.22, bg, x, y, z);
+        const p = new THREE.Mesh(
+          new THREE.PlaneGeometry(w - 0.4, 0.85),
+          new THREE.MeshBasicMaterial({ map: textTex(text, fg), transparent: true, fog: false }),
+        );
+        p.position.set(x, y, z + 0.13);
+        parent.add(p);
+      }
+      // Window unit: dark frame, warm pane, side shutters, sill.
+      function windowUnit(parent: THREE.Object3D, x: number, y: number, z: number, shutter: THREE.Material | null): void {
+        B(parent, 1.5, 1.7, 0.08, darkWood, x, y, z);
+        const pane = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 1.5), glow(0xffd98a));
+        pane.position.set(x, y, z + 0.06);
+        parent.add(pane);
+        B(parent, 1.5, 0.1, 0.14, darkWood, x, y - 0.9, z + 0.02); // sill
+        if (shutter) {
+          B(parent, 0.5, 1.7, 0.06, shutter, x - 1.0, y, z + 0.02);
+          B(parent, 0.5, 1.7, 0.06, shutter, x + 1.0, y, z + 0.02);
+        }
+      }
+
+      // LEFT ROW (weathered wood, like the ref's left side).
+      const leftRow = new THREE.Group();
+      leftRow.position.set(-6.5, 0, 0);
+      street.add(leftRow);
+      // Saloon: false front + porch + batwing doors + signs.
+      B(leftRow, 9, 5, 1, wood, 0, 2.5, 0);
+      B(leftRow, 9, 1.8, 0.6, darkWood, 0, 5.6, 0.2); // false-front parapet
+      B(leftRow, 9, 0.22, 3.0, darkWood, 0, 3.2, 2.0); // porch roof
+      for (const px of [-3.8, -1.3, 1.3, 3.8]) {
+        B(leftRow, 0.26, 3.1, 0.26, darkWood, px, 1.55, 3.2, 0, (px > 0 ? 1 : -1) * 0.02);
+      }
+      windowUnit(leftRow, -2.6, 2.3, 0.52, lam(0x4a6a4a));
+      windowUnit(leftRow, 2.6, 2.3, 0.52, lam(0x4a6a4a));
+      const rec = new THREE.Mesh(new THREE.PlaneGeometry(1.9, 2.7), new THREE.MeshBasicMaterial({ color: 0x20140c }));
+      rec.position.set(0, 1.45, 0.53);
+      leftRow.add(rec);
+      B(leftRow, 0.8, 1.1, 0.06, darkWood, -0.44, 1.0, 0.58);
+      B(leftRow, 0.8, 1.1, 0.06, darkWood, 0.44, 1.0, 0.58);
+      signBoard(leftRow, "SALOON", "#f7e3ac", darkWood, 6, 0, 4.35, 0.75);
+      B(leftRow, 0.12, 0.12, 1.4, darkWood, 1.8, 3.0, 1.1); // blade-sign bracket
+      B(leftRow, 1.5, 0.9, 0.1, wood, 1.8, 2.4, 1.7); // hanging blade sign
+      // Two-story neighbor with balcony (ref's left balcony).
+      const lodge = new THREE.Group();
+      lodge.position.set(0, 0, -9.5);
+      leftRow.add(lodge);
+      B(lodge, 8, 6.5, 1, lam(0x7d6a52), 0, 3.25, 0);
+      B(lodge, 8, 0.5, 1.2, darkWood, 0, 6.6, 0); // cornice
+      B(lodge, 8, 0.25, 2.2, darkWood, 0, 3.35, 1.4); // balcony floor
+      B(lodge, 8, 0.12, 0.12, darkWood, 0, 4.25, 2.4); // balcony rail
+      for (let i = -3; i <= 3; i++) B(lodge, 0.09, 0.85, 0.09, darkWood, i * 1.05, 3.82, 2.4);
+      B(lodge, 0.24, 3.2, 0.24, darkWood, -3.4, 1.6, 2.2);
+      B(lodge, 0.24, 3.2, 0.24, darkWood, 3.4, 1.6, 2.2);
+      windowUnit(lodge, -2, 1.9, 0.52, lam(0x8a4a3a));
+      const dlodge = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 2.5), new THREE.MeshBasicMaterial({ color: 0x2a1c10 }));
+      dlodge.position.set(1.8, 1.25, 0.53);
+      lodge.add(dlodge);
+      windowUnit(lodge, -2, 5.0, 0.52, null);
+      windowUnit(lodge, 2, 5.0, 0.52, null);
+      // Boardwalk spanning the row + steps + barrels.
+      B(leftRow, 3.2, 0.35, 20, walkMat, 0, 0.175, -1.5);
+      B(leftRow, 3.2, 0.18, 1.2, walkMat, 0, 0.09, 9.0);
+      B(leftRow, 3.2, 0.18, 1.2, walkMat, 0, 0.09, -12.0);
+      for (const [bx, bz] of [[-1.1, 8.2], [0.1, 8.6]] as const) {
+        const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.38, 0.9, 12), wood);
+        bar.position.set(bx, 0.45, bz);
+        leftRow.add(bar);
+        B(leftRow, 0.72, 0.06, 0.72, darkWood, bx, 0.25, bz);
+        B(leftRow, 0.72, 0.06, 0.72, darkWood, bx, 0.68, bz);
+      }
+
+      // RIGHT ROW (cream restaurant + gray stone, like the ref's right side).
+      const rightRow = new THREE.Group();
+      rightRow.position.set(6.5, 0, 0);
+      street.add(rightRow);
+      B(rightRow, 10, 5, 1, cream, 0, 2.5, 0);
+      B(rightRow, 10, 0.9, 0.7, cream, 0, 5.3, 0.1); // parapet cap
+      B(rightRow, 10, 0.16, 3.4, lam(0x9a8a68), 0, 3.35, 2.0, 0, 0, 0.1); // slanted awning
+      for (const px of [-4.2, -1.4, 1.4, 4.2]) B(rightRow, 0.24, 3.2, 0.24, darkWood, px, 1.6, 3.4);
+      signBoard(rightRow, "RESTAURANT", "#f2e6c4", lam(0x2e5d3a), 7, 0, 4.35, 0.65);
+      windowUnit(rightRow, -3.2, 2.2, 0.52, null);
+      windowUnit(rightRow, -1.1, 2.2, 0.52, null);
+      windowUnit(rightRow, 3.2, 2.2, 0.52, null);
+      const rdoor = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 2.5), new THREE.MeshBasicMaterial({ color: 0x3a2a1a }));
+      rdoor.position.set(1.1, 1.25, 0.53);
+      rightRow.add(rdoor);
+      // Gray stone 2-story.
+      const stone2 = new THREE.Group();
+      stone2.position.set(0, 0, -10);
+      rightRow.add(stone2);
+      B(stone2, 8, 6.5, 1, stone, 0, 3.25, 0);
+      B(stone2, 8.4, 0.4, 1.3, lam(0x6a6d75), 0, 6.6, 0); // cornice
+      windowUnit(stone2, -2, 1.9, 0.52, null);
+      windowUnit(stone2, 2, 1.9, 0.52, null);
+      windowUnit(stone2, -2, 5.0, 0.52, null);
+      windowUnit(stone2, 2, 5.0, 0.52, null);
+      const sdoor = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 2.5), new THREE.MeshBasicMaterial({ color: 0x2a2d33 }));
+      sdoor.position.set(0, 1.25, 0.53);
+      stone2.add(sdoor);
+      B(rightRow, 3.2, 0.35, 20, walkMat, 0, 0.175, -2.5); // boardwalk
+      B(rightRow, 3.2, 0.18, 1.2, walkMat, 0, 0.09, 8.0);
+      // End of street: faded-red false front closes the vista (ref's red block).
+      const end = new THREE.Group();
+      end.position.set(0, 0, -16);
+      street.add(end);
+      B(end, 12, 5.5, 1, brickRed, 0, 2.75, 0);
+      B(end, 12, 1.6, 0.7, lam(0x7e3a2c), 0, 6.1, 0.1);
+      signBoard(end, "BANK", "#f2e6c4", lam(0x7e3a2c), 5, 0, 4.6, 0.65);
+      windowUnit(end, -3.5, 2.6, 0.52, null);
+      windowUnit(end, 3.5, 2.6, 0.52, null);
+      const edoor = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 2.8), new THREE.MeshBasicMaterial({ color: 0x2a1a10 }));
+      edoor.position.set(0, 1.4, 0.53);
+      end.add(edoor);
+      // Corral fence + wagon wheel, foreground right (ref's right fence).
+      const corral = new THREE.Group();
+      corral.position.set(4.6, 0, 10.5);
+      street.add(corral);
+      for (const px of [-2.4, 0, 2.4]) B(corral, 0.22, 1.25, 0.22, darkWood, px, 0.62, 0);
+      B(corral, 5.4, 0.16, 0.16, darkWood, 0, 1.1, 0);
+      B(corral, 5.4, 0.16, 0.16, darkWood, 0, 0.62, 0);
+      const wheel = new THREE.Group();
+      wheel.position.set(3.4, 0.6, 0.4);
+      wheel.rotation.set(0.22, 0.45, 0);
+      corral.add(wheel);
+      wheel.add(new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.07, 8, 20), darkWood));
+      for (let i = 0; i < 8; i++) {
+        const sp = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.0, 6), wood);
+        sp.rotation.z = (i / 8) * Math.PI * 2;
+        wheel.add(sp);
+      }
+      const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.16, 8), darkWood);
+      hub.rotation.x = Math.PI / 2;
+      wheel.add(hub);
+
+      scene.add(street);
     }
-    // Water tower beside the street.
-    const tower = new THREE.Group();
-    const towerWood = lam2(0x7a5a38);
-    for (const [lx, lz] of [[-1.2, -1.2], [1.2, -1.2], [-1.2, 1.2], [1.2, 1.2]] as const) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.3, 7, 0.3), towerWood);
-      leg.position.set(lx, 3.5, lz);
-      tower.add(leg);
-    }
-    const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 2.0, 2.6, 10), lam2(0x8a6a45));
-    tank.position.y = 8.2;
-    tower.add(tank);
-    const roof = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 2.1, 1.2, 10), lam2(0x5e4226));
-    roof.position.y = 10.1;
-    tower.add(roof);
-    tower.position.copy(mid).addScaledVector(duelDir, 10).addScaledVector(perp, 14);
-    dressing.add(tower);
-    // Telegraph pole + sagging wire roadside.
-    const poleMat = lam2(0x5e4226);
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 7.5, 7), poleMat);
-    pole.position.copy(mid).addScaledVector(duelDir, 2).addScaledVector(perp, -11);
-    pole.position.y = 3.75;
-    dressing.add(pole);
-    const cross2 = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.12, 0.12), poleMat);
-    cross2.position.copy(pole.position);
-    cross2.position.y = 6.9;
-    dressing.add(cross2);
-    const wireMat = basic(0x2e2620);
-    for (let k = 0; k < 4; k++) {
-      const seg = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 3.2), wireMat);
-      seg.position.copy(pole.position).addScaledVector(duelDir, 1.8 + k * 3.1);
-      seg.position.y = 6.85 - Math.sin((k / 3) * Math.PI) * 0.35;
-      seg.rotation.y = Math.atan2(duelDir.x, duelDir.z);
-      dressing.add(seg);
-    }
-    // Porch lanterns: warm glow points near the storefronts.
-    const lampGlow = basic(0xffc46b, false);
-    const lampBase = lam2(0x2e2620);
-    for (const sx of [-4, 0.5, 5]) {
-      const post = mid.clone().addScaledVector(duelDir, 12.5).addScaledVector(perp, sx);
-      const housing = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.3, 0.22), lampBase);
-      housing.position.set(post.x, 3.1, post.z);
-      dressing.add(housing);
-      const glow = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 6), lampGlow);
-      glow.position.set(post.x, 3.05, post.z);
-      dressing.add(glow);
-    }
-    // Crates + sacks stacked by the boardwalk.
-    const crateM = lam2(0x9a7a52);
-    const crateDefs = [[-7.5, 10.2, 0.9], [-6.5, 10.5, 0.7], [-7.1, 10.3, 0.55]] as const;
-    crateDefs.forEach(([sx, dd, s], i) => {
-      const c = new THREE.Mesh(new THREE.BoxGeometry(s, s, s), crateM);
-      c.position.copy(mid).addScaledVector(duelDir, dd).addScaledVector(perp, sx);
-      c.position.y = i === 2 ? s * 1.4 : s / 2;
-      c.rotation.y = i * 0.4;
-      dressing.add(c);
-    });
-    const sackM = lam2(0xc9b183);
-    for (const [sx, dd] of [[9.5, 10.5], [10.3, 10.2]] as const) {
-      const s = new THREE.Mesh(new THREE.SphereGeometry(0.55, 7, 5), sackM);
-      s.scale.y = 0.75;
-      s.position.copy(mid).addScaledVector(duelDir, dd).addScaledVector(perp, sx);
-      s.position.y = 0.4;
-      dressing.add(s);
-    }
-    // Ground tone patches (dirt variation, kills the flat-floor read).
-    const patchM = new THREE.MeshBasicMaterial({ color: 0xc49a68 });
-    for (const [sx, dd, r] of [[-3, 1, 3.2], [4, -2, 2.4], [0, 6, 4.0]] as const) {
-      const p = new THREE.Mesh(new THREE.CircleGeometry(r, 18), patchM);
-      p.rotation.x = -Math.PI / 2;
-      p.position.copy(mid).addScaledVector(duelDir, dd).addScaledVector(perp, sx);
-      p.position.y = 0.015;
-      dressing.add(p);
+
+    // Dressing: depth + life for zero shipped bytes (all procedural boxes).
+    // Buildings sit ~12-14m past mid; keep new props clear of the duel line.
+    // Grouped as "ProceduralDressing": hidden with the street when the Blender
+    // set (which carries its own props + lamps) lands.
+    {
+      const dressing = new THREE.Group();
+      dressing.name = "ProceduralDressing";
+      scene.add(dressing);
+      const mid = pPos.clone().lerp(fPos, 0.5);
+      const perp = new THREE.Vector3(-duelDir.z, 0, duelDir.x);
+      const lam2 = (c: number) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
+      const basic = (c: number, fog = true) => new THREE.MeshBasicMaterial({ color: c, fog });
+      // Distant mesas (haze silhouettes past the street).
+      const mesaMat = lam2(0xb98a63);
+      const mesaCap = lam2(0x8f5f43);
+      for (const [sx, dd, w, h] of [[-14, 26, 10, 4], [6, 34, 14, 6], [22, 28, 8, 3]] as const) {
+        const mesa = new THREE.Mesh(new THREE.BoxGeometry(w, h, 3), mesaMat);
+        mesa.position.copy(mid).addScaledVector(duelDir, dd).addScaledVector(perp, sx);
+        mesa.position.y = h / 2 - 0.2;
+        dressing.add(mesa);
+        const cap = new THREE.Mesh(new THREE.BoxGeometry(w * 0.7, h * 0.35, 3.2), mesaCap);
+        cap.position.copy(mesa.position);
+        cap.position.y += h * 0.55;
+        dressing.add(cap);
+      }
+      // Clouds: flat-shaded puffs high past the street.
+      const cloudMat = basic(0xfdf6e8);
+      for (const [sx, dd, y] of [[-10, 20, 16], [8, 26, 20], [0, 30, 24]] as const) {
+        const cl = new THREE.Group();
+        for (let k = 0; k < 3; k++) {
+          const puff = new THREE.Mesh(new THREE.SphereGeometry(1.6 - k * 0.3, 7, 5), cloudMat);
+          puff.position.set(k * 1.8 - 1.8, (k % 2) * 0.5, 0);
+          puff.scale.y = 0.55;
+          cl.add(puff);
+        }
+        cl.position.copy(mid).addScaledVector(duelDir, dd).addScaledVector(perp, sx);
+        cl.position.y = y;
+        dressing.add(cl);
+      }
+      // Water tower beside the street.
+      const tower = new THREE.Group();
+      const towerWood = lam2(0x7a5a38);
+      for (const [lx, lz] of [[-1.2, -1.2], [1.2, -1.2], [-1.2, 1.2], [1.2, 1.2]] as const) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.3, 7, 0.3), towerWood);
+        leg.position.set(lx, 3.5, lz);
+        tower.add(leg);
+      }
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 2.0, 2.6, 10), lam2(0x8a6a45));
+      tank.position.y = 8.2;
+      tower.add(tank);
+      const roof = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 2.1, 1.2, 10), lam2(0x5e4226));
+      roof.position.y = 10.1;
+      tower.add(roof);
+      tower.position.copy(mid).addScaledVector(duelDir, 10).addScaledVector(perp, 14);
+      dressing.add(tower);
+      // Telegraph pole + sagging wire roadside.
+      const poleMat = lam2(0x5e4226);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 7.5, 7), poleMat);
+      pole.position.copy(mid).addScaledVector(duelDir, 2).addScaledVector(perp, -11);
+      pole.position.y = 3.75;
+      dressing.add(pole);
+      const cross2 = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.12, 0.12), poleMat);
+      cross2.position.copy(pole.position);
+      cross2.position.y = 6.9;
+      dressing.add(cross2);
+      const wireMat = basic(0x2e2620);
+      for (let k = 0; k < 4; k++) {
+        const seg = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 3.2), wireMat);
+        seg.position.copy(pole.position).addScaledVector(duelDir, 1.8 + k * 3.1);
+        seg.position.y = 6.85 - Math.sin((k / 3) * Math.PI) * 0.35;
+        seg.rotation.y = Math.atan2(duelDir.x, duelDir.z);
+        dressing.add(seg);
+      }
+      // Porch lanterns: warm glow points near the storefronts.
+      const lampGlow = basic(0xffc46b, false);
+      const lampBase = lam2(0x2e2620);
+      for (const sx of [-4, 0.5, 5]) {
+        const post = mid.clone().addScaledVector(duelDir, 12.5).addScaledVector(perp, sx);
+        const housing = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.3, 0.22), lampBase);
+        housing.position.set(post.x, 3.1, post.z);
+        dressing.add(housing);
+        const glow = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 6), lampGlow);
+        glow.position.set(post.x, 3.05, post.z);
+        dressing.add(glow);
+      }
+      // Crates + sacks stacked by the boardwalk.
+      const crateM = lam2(0x9a7a52);
+      const crateDefs = [[-7.5, 10.2, 0.9], [-6.5, 10.5, 0.7], [-7.1, 10.3, 0.55]] as const;
+      crateDefs.forEach(([sx, dd, s], i) => {
+        const c = new THREE.Mesh(new THREE.BoxGeometry(s, s, s), crateM);
+        c.position.copy(mid).addScaledVector(duelDir, dd).addScaledVector(perp, sx);
+        c.position.y = i === 2 ? s * 1.4 : s / 2;
+        c.rotation.y = i * 0.4;
+        dressing.add(c);
+      });
+      const sackM = lam2(0xc9b183);
+      for (const [sx, dd] of [[9.5, 10.5], [10.3, 10.2]] as const) {
+        const s = new THREE.Mesh(new THREE.SphereGeometry(0.55, 7, 5), sackM);
+        s.scale.y = 0.75;
+        s.position.copy(mid).addScaledVector(duelDir, dd).addScaledVector(perp, sx);
+        s.position.y = 0.4;
+        dressing.add(s);
+      }
+      // Ground tone patches (dirt variation, kills the flat-floor read).
+      const patchM = new THREE.MeshBasicMaterial({ color: 0xc49a68 });
+      for (const [sx, dd, r] of [[-3, 1, 3.2], [4, -2, 2.4], [0, 6, 4.0]] as const) {
+        const p = new THREE.Mesh(new THREE.CircleGeometry(r, 18), patchM);
+        p.rotation.x = -Math.PI / 2;
+        p.position.copy(mid).addScaledVector(duelDir, dd).addScaledVector(perp, sx);
+        p.position.y = 0.015;
+        dressing.add(p);
+      }
     }
   }
 
@@ -839,7 +881,9 @@ export function createArena(distM: number): {
     const h = host ? host.clientHeight : window.innerHeight;
     // Hit tests/aim read getBoundingClientRect (CSS px), so the backing
     // store's pixel ratio never changes gameplay.
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, coarse ? 1.5 : 2, pixelRatioCap));
+    // Ceiling by device tier (render/device.ts: 1x on iOS / <= 4GB, 1.5x
+    // other touch, 2x desktop); the watchdog only ever lowers it further.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, deviceTier().maxPixelRatio, pixelRatioCap));
     renderer.setSize(w, h, false);
     const db = renderer.getDrawingBufferSize(new THREE.Vector2());
     post?.setSize(db.x, db.y);
@@ -932,12 +976,34 @@ export function createArena(distM: number): {
     camera,
     renderer,
     render,
-    disposePost: () => post?.dispose(),
+    prepare(obj) {
+      const before = renderer.info.programs?.length ?? 0;
+      try {
+        if (renderer.extensions.has("KHR_parallel_shader_compile")) {
+          const ready = renderer.compileAsync(obj, camera, scene);
+          if ((renderer.info.programs?.length ?? 0) === before) return Promise.resolve();
+          return ready.then(() => undefined, () => undefined);
+        }
+        // No parallel compile (some Safari / software GL): start the links
+        // now, the first draw finishes them (compileAsync would only warn).
+        renderer.compile(obj, camera, scene);
+      } catch { /* visual only: the first draw compiles */ }
+      return Promise.resolve();
+    },
+    release() {
+      renderer.domElement.style.visibility = "";
+      post?.dispose();
+      post = null;
+      pinPrograms(renderer);
+      releaseScene(scene);
+      renderer.renderLists.dispose();
+    },
     worldPerPxAt,
     setTimeOfDay,
     fitCamera,
     noteFrame,
     setProneFrame,
     setFloor,
+    buildProceduralStreet,
   };
 }

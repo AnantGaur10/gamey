@@ -151,8 +151,10 @@ export function makeGunHolster(gun: THREE.Object3D | null, socket: THREE.Object3
 }
 
 /** Shoulder x/z + elbow x that put `hand` on `target` (world), by a coarse
- *  then fine grid search. Used once per procedural rig (the GLB bakes the
- *  same solve into its idle clip in build_glbs.py). */
+ *  then fine grid search. Used by the procedural rig (the GLB bakes the
+ *  same solve into its idle clip in build_glbs.py). Each step refreshes only
+ *  the hand's ancestor chain (getWorldPosition does that); a whole-rig
+ *  updateMatrixWorld per step cost ~200ms per cowboy at 4x CPU throttle. */
 function solveHandPose(root: THREE.Object3D, arm: THREE.Object3D, elbow: THREE.Object3D, hand: THREE.Object3D, target: THREE.Vector3): [number, number, number] {
   const p = new THREE.Vector3();
   let best: [number, number, number] = [0, 0, 0];
@@ -163,15 +165,18 @@ function solveHandPose(root: THREE.Object3D, arm: THREE.Object3D, elbow: THREE.O
       const ax = cx - span + (2 * span * i) / n, az = cz - span + (2 * span * j) / n, ex = ce - span + (2 * span * k) / n;
       arm.rotation.set(ax, 0, az);
       elbow.rotation.x = ex;
-      root.updateMatrixWorld(true);
       const d = hand.getWorldPosition(p).distanceToSquared(target);
       if (d < bd) { bd = d; best = [ax, az, ex]; }
     }
   };
   search([0, 0, -0.5], 1.4, 14);
   search(best, 0.2, 10);
+  root.updateMatrixWorld(true);
   return best;
 }
+/** Every procedural rig has the same proportions and the solve is yaw
+ *  invariant (target offset is world-up), so one solve serves the session. */
+let procHandPose: [number, number, number] | null = null;
 
 export function createCowboy(opts: {
   coat: number;
@@ -362,7 +367,7 @@ export function createCowboy(opts: {
     holsterCtl.holster();
     group.updateMatrixWorld(true);
     const target = grip.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.03, 0));
-    handPose = solveHandPose(group, armR, elbowR, handR, target);
+    handPose = procHandPose ??= solveHandPose(group, armR, elbowR, handR, target);
     if (restParent === elbowR) holsterCtl.drawStep(1); // leave the gun where it was
     return handPose;
   }

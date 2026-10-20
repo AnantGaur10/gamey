@@ -12,6 +12,7 @@ import { createSway, type Sway } from "../render/sway";
 import { createRagdoll, bindAccessories, type Ragdoll } from "../render/ragdoll";
 import { createFixedStepper, STEP } from "../game/fixedStep";
 import { quickDraw, gunOut, QD_END, type ArmPose } from "../render/quickDraw";
+import { deviceTier } from "../render/device";
 
 // Live menu backdrop (user 2026-10-14: "the background is not static and
 // moving (has animations or gameplay)"). A looping showdown on the chosen
@@ -45,10 +46,17 @@ interface MenuScene {
   /** Calm = the standoff only, no shots (behind the result cards: the hero
       must not win behind a DEFEAT); loops fade on to the next standoff. */
   setCalm(calm: boolean): void;
+  /** The map the backdrop shows (its set is loaded). */
+  mapId(): MapId;
   dispose(): void;
 }
 
 let live: MenuScene | null = null;
+
+/** Map on the live backdrop, null when none is up. */
+export function menuMapId(): MapId | null {
+  return live?.mapId() ?? null;
+}
 
 /** Start (or retarget) the menu backdrop. Idempotent across menu screens. */
 export function showMenuScene(choice: MapChoice, gunId: string, opts: { calm?: boolean } = {}): void {
@@ -88,7 +96,10 @@ const ease = (u: number) => u * u * (3 - 2 * u);
 function disposeCowboy(c: Cowboy | null, scene: THREE.Scene): void {
   if (!c) return;
   scene.remove(c.group);
-  // Geometry is per load; the flat cowboy material is shared (never disposed).
+  // GLB rigs share their geometry with the session cache (cowboyGlb.ts): the
+  // next loop's clone draws it, so only the procedural fallback frees its own.
+  // The flat cowboy material is shared too (never disposed).
+  if ("mixer" in c) return;
   c.group.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
 }
 
@@ -184,6 +195,7 @@ function createMenuScene(initialChoice: MapChoice, initialGun: string, initialCa
   let kick = 0;
   let punch = -1;
   let wantMap: MapId | null = null; // a map picked mid-loop: cut to it
+  let preparing = false; // buildShot is compiling the new shot's shaders
   const from = { hero: { s: 0.55, z: 0, e: -0.25 } as ArmPose, foe: { s: 0.55, z: 0, e: -0.25 } as ArmPose };
 
   // Tracer streaks (head + 0.7m tail) for the two shots.
@@ -210,7 +222,10 @@ function createMenuScene(initialChoice: MapChoice, initialGun: string, initialCa
       mapId = wantMap;
       wantMap = null;
     } else if (loop > 0) {
-      mapId = choice === "random" ? order[loop % order.length] : choice;
+      // RANDOM cycles the maps, except on low-memory devices / data saver:
+      // every map visited stays loaded (and downloaded) for the backdrop's life.
+      const cycle = !deviceTier().lowMemory && !deviceTier().saveData;
+      mapId = choice === "random" ? (cycle ? order[loop % order.length] : mapId) : choice;
     }
     const def = MAPS[mapId];
     const stage = loop % 2 === 0 ? 1 : 0; // dusk first, then noon, ...
@@ -228,6 +243,7 @@ function createMenuScene(initialChoice: MapChoice, initialGun: string, initialCa
     if (shownSet) shownSet.group.visible = false;
     shownSet = set;
     if (set) set.group.visible = true;
+    if (mapId === "street" && !set) arena.buildProceduralStreet(); // the GLB failed: stand-in
     for (const n of ["ProceduralStreet", "ProceduralDressing"]) {
       const o = scene.getObjectByName(n);
       if (o) o.visible = mapId === "street" && !set;
@@ -271,6 +287,12 @@ function createMenuScene(initialChoice: MapChoice, initialGun: string, initialCa
     punch = -1;
     camera.zoom = 1;
     camera.updateProjectionMatrix();
+    // New maps / outfits: compile their shaders off the main thread before
+    // the reveal (a first-frame compile froze the home menu ~3s at 4x CPU).
+    preparing = true;
+    await arena.prepare(scene);
+    preparing = false;
+    if (!alive) return;
     loop++;
     host.classList.remove("loading");
     fade.classList.remove("on");
@@ -431,11 +453,14 @@ function createMenuScene(initialChoice: MapChoice, initialGun: string, initialCa
     if (!alive) return;
     raf = requestAnimationFrame(frame);
     const now = performance.now();
+    if (preparing) { last = now; return; } // a draw now would compile on the main thread
     const rawDt = (now - last) / 1000;
     if (coarse && rawDt < 1 / 32) return; // ~30fps on touch devices: battery
     last = now;
     const dt = Math.min(rawDt, 0.1);
-    arena.noteFrame(rawDt);
+    // Watchdog budget scaled to that cap: a 33ms interval is the cap, not a
+    // slow device (fed raw, every phone shed to 1x + no post in the menu).
+    arena.noteFrame(coarse ? rawDt / 2 : rawDt);
     const nowSec = now / 1000;
     if (phase !== "build") update(dt, nowSec);
     heroSway?.sense(dt);
@@ -486,6 +511,7 @@ function createMenuScene(initialChoice: MapChoice, initialGun: string, initialCa
     setCalm(c) {
       calm = c;
     },
+    mapId: () => mapId,
     dispose() {
       alive = false;
       cancelAnimationFrame(raf);
@@ -498,9 +524,7 @@ function createMenuScene(initialChoice: MapChoice, initialGun: string, initialCa
       foeShadow.dispose();
       tracerGeo.dispose();
       tracerMat.dispose();
-      arena.disposePost();
-      renderer.dispose();
-      renderer.forceContextLoss(); // one GL context at a time (the duel builds its own)
+      arena.release(); // the shared GL context stays for the duel (render/arena.ts)
       host.replaceChildren();
       host.classList.remove("loading");
       if (import.meta.env.DEV) delete (window as unknown as { __menu?: unknown }).__menu;

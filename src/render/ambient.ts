@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { stagePositions } from "./arena";
+import { retireMaterial } from "./gpu";
 
 // Ambient air particles per time of day: sunlit dust motes (noon), warm
 // motes (evening), fireflies (night), rising embers (hell). One THREE.Points
@@ -129,7 +130,7 @@ export function createAmbient(scene: THREE.Scene, distM: number): Ambient {
   function dispose(): void {
     scene.remove(points);
     geo.dispose();
-    mat.dispose();
+    retireMaterial(mat); // keeps its program for the next arena (gpu.ts)
   }
   setTimeOfDay(0, false);
   return { setTimeOfDay, tick, dispose };

@@ -3,7 +3,7 @@ import { createArena, stagePositions, faceToward, cssSkyForRound, createShadowDe
 import { createSway, type Sway } from "../render/sway";
 import { createCowboy, paintGun, type Cowboy } from "../render/cowboy";
 import { loadCowboyGlb, swapCowboy, type CowboyGlb } from "../render/cowboyGlb";
-import { loadStreetGlb, type StreetSet } from "../render/streetGlb";
+import { loadStreetGlb, streetGlbReady, type StreetSet } from "../render/streetGlb";
 import { loadMapSet, preloadSet, type MapSet } from "../render/setGlb";
 import { MAPS, MAP_CHOICES, pickMap, mapLabel, isMapChoice, cssSky, type MapId, type MapChoice } from "../render/maps";
 import { foeLookFor, pickSeriesFoe, FOE_LOOKS, type FoeLookId } from "../render/foes";
@@ -21,10 +21,11 @@ import { mountFocusUI, isCoarsePointer, type FocusUI } from "./focus";
 import { mountCoach, type Coach } from "./coach";
 import { TimingQte } from "../game/timingQte";
 import { quickDraw, gunOut, QD_END } from "../render/quickDraw";
-import { showMenuScene, hideMenuScene } from "./menuScene";
+import { showMenuScene, hideMenuScene, menuMapId } from "./menuScene";
 import { storagePersisted } from "../store/SafeStore";
 import { needsTutorial, markTutorialSeen } from "../portal/firstLaunch";
 import { createAudioManager, type AudioManager } from "../audio/AudioManager";
+import { initDeviceTier, deviceTier } from "../render/device";
 
 export type Mode = "standard" | "deathmatch" | "tutorial";
 
@@ -62,6 +63,7 @@ function gauss(): number {
 
 export function boot(root: HTMLElement, adapter: PortalAdapter): void {
   adapter.loadingStart();
+  initDeviceTier(adapter.deviceInfo()); // before the first canvas: sets its pixel-ratio ceiling
   document.body.classList.remove("in-duel");
   root.innerHTML = "";
   const progress = adapter.loadProgress();
@@ -301,10 +303,14 @@ function runSeries(root: HTMLElement, adapter: PortalAdapter, mode: Mode, audio:
 }
 
 /** Saved MAP choice -> a concrete map ("random" rolls), with its set GLB
-    fetched right away so the first duel swaps it in fast. */
+    fetched right away so the first duel swaps it in fast. Low-memory /
+    data-saver devices: RANDOM takes the backdrop's map (itself a random
+    pick, already downloaded) instead of fetching another 1.2-1.7MB set. */
 function rollMap(adapter: PortalAdapter): MapId {
-  const choice = adapter.loadProgress().settings.map;
-  const id = pickMap(isMapChoice(choice) ? choice : "random");
+  const raw = adapter.loadProgress().settings.map;
+  const choice = isMapChoice(raw) ? raw : "random";
+  const thrifty = deviceTier().lowMemory || deviceTier().saveData;
+  const id = (choice === "random" && thrifty ? menuMapId() : null) ?? pickMap(choice);
   const glb = MAPS[id].glb;
   if (glb) preloadSet(`${import.meta.env.BASE_URL}models/${glb}`);
   return id;
@@ -367,7 +373,7 @@ function runDuel(
   // Wind picks up as the day goes (noon breeze -> night gusts; hell roars).
   audio.startWind((hellRound ? 0.8 : [0.45, 0.65, 0.85][Math.min(stageIdx, 2)]) * mapDef.wind, hellRound);
 
-  const { scene, camera, renderer, render, disposePost, worldPerPxAt, fitCamera, setTimeOfDay, noteFrame, setProneFrame, setFloor } = createArena(distM);
+  const { scene, camera, renderer, render, release, prepare, worldPerPxAt, fitCamera, setTimeOfDay, noteFrame, setProneFrame, setFloor, buildProceduralStreet } = createArena(distM);
   // Time-of-day driver: R1 noon → R2 evening → R3+ night, coloured per map.
   // Hell: Main Street drops into its lava causeway (render/hell.ts); every
   // other map stays put and turns red / dark brown (setGlb hell tint).
@@ -378,6 +384,9 @@ function runDuel(
     ? "linear-gradient(#0d0202 0%, #3a0a06 60%, #ff3a12 100%)"
     : mapId === "street" ? cssSkyForRound(stageIdx) : cssSky(mapDef.tod(stageIdx, hellRound));
   root.appendChild(renderer.domElement);
+  // Hidden (CSS sky shows) until the first draw: frame() holds it back while
+  // prepare() compiles any new shaders off the main thread.
+  renderer.domElement.style.visibility = "hidden";
   // Lens vignette (CSS, plain alpha): darker variant for night + hell.
   const vignette = el(`<div class="vignette"></div>`);
   vignette.classList.toggle("dark", hellRound || stageIdx >= 2);
@@ -509,7 +518,8 @@ function runDuel(
   let playerSway: Sway | null = null;
   let foeSway: Sway | null = null;
   const base = import.meta.env.BASE_URL;
-  void loadCowboyGlb(`${base}models/cowboy_hero.glb`, "H").then((m) => {
+  void loadCowboyGlb(`${base}models/cowboy_hero.glb`, "H").then(async (m) => {
+    if (m && alive) await prepare(m.group); // new shaders compile off the main thread first
     if (m && alive) {
       player = swapCowboy(scene, player, m);
       playerSway = createSway(m.sway);
@@ -527,7 +537,8 @@ function runDuel(
       playerDoll = createRagdoll(scene, player.parts, gun.id, faceOf("player"));
     }
   });
-  void loadCowboyGlb(`${base}models/${foeLook.glb}`, "O").then((m) => {
+  void loadCowboyGlb(`${base}models/${foeLook.glb}`, "O").then(async (m) => {
+    if (m && alive) await prepare(m.group);
     if (m && alive) {
       foe = swapCowboy(scene, foe, m);
       foeSway = createSway(m.sway);
@@ -545,16 +556,25 @@ function runDuel(
   // Its ambient life (signs, horse, tumbleweed) is posed from wall time in
   // frame(); windows/lanterns glow by time of day (noon dark -> night lit).
   let street: StreetSet | null = null;
-  if (mapId === "street" && !hellRound) void loadStreetGlb(`${base}models/street.glb`, distM).then((s) => {
-    if (!s || !alive) return;
-    for (const n of ["ProceduralStreet", "ProceduralDressing"]) {
-      const old = scene.getObjectByName(n);
-      if (old) old.visible = false;
-    }
-    s.setGlow(hellRound ? 1 : [0, 0.55, 1][Math.min(stageIdx, 2)]);
-    scene.add(s.group);
-    street = s;
-  });
+  if (mapId === "street" && !hellRound) {
+    const url = `${base}models/street.glb`;
+    // The procedural stand-in only while the GLB is still downloading (first
+    // visit) or if it fails; a parsed street lands before the first frame.
+    if (!streetGlbReady(url)) buildProceduralStreet();
+    void loadStreetGlb(url, distM).then(async (s) => {
+      if (!alive) return;
+      if (!s) { buildProceduralStreet(); return; }
+      await prepare(s.group); // its shaders compile off the main thread first
+      if (!alive) return;
+      for (const n of ["ProceduralStreet", "ProceduralDressing"]) {
+        const old = scene.getObjectByName(n);
+        if (old) old.visible = false;
+      }
+      s.setGlow(hellRound ? 1 : [0, 0.55, 1][Math.min(stageIdx, 2)]);
+      scene.add(s.group);
+      street = s;
+    });
+  }
   // The other maps: the procedural street never shows (the recoloured arena
   // floor + sky hold until the set lands, ~instant once cached).
   let mapSet: MapSet | null = null;
@@ -571,10 +591,12 @@ function runDuel(
       const old = scene.getObjectByName(n);
       if (old) old.visible = false;
     }
-    void loadMapSet(`${base}models/${mapDef.glb}`, distM, mapDef.paintGain).then((s) => {
+    void loadMapSet(`${base}models/${mapDef.glb}`, distM, mapDef.paintGain).then(async (s) => {
       if (!s) return;
       if (!alive) { s.dispose(); return; }
       lookMapSet(s, stageIdx, hellRound);
+      await prepare(s.group); // its shaders compile off the main thread first
+      if (!alive) { s.dispose(); return; }
       scene.add(s.group);
       mapSet = s;
     });
@@ -927,7 +949,7 @@ function runDuel(
           outerShare: +(out.filter((v) => v > 0.6).length / out.length).toFixed(3) };
       },
       /** Last frame's draw calls / triangles + backing pixel ratio (perf). */
-      info: () => ({ ...renderer.info.render, pr: renderer.getPixelRatio() }),
+      info: () => ({ ...renderer.info.render, pr: renderer.getPixelRatio(), geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures, programs: renderer.info.programs?.length ?? 0 }),
       /** Live gunsmoke/dust/flash sprite counts (impact-FX checks). */
       fx: () => gunsmoke.live(),
       /** Hat / coat-tail sway pivot angles (x, z) per duelist (sway checks). */
@@ -2274,11 +2296,9 @@ function runDuel(
     playerShadow.dispose();
     foeShadow.dispose();
     cancelAnimationFrame(raf);
-    disposePost();
-    renderer.dispose();
-    // Release the GL context now: a long deathmatch otherwise piles up
-    // contexts until Chrome drops the oldest ("Too many active WebGL contexts").
-    renderer.forceContextLoss();
+    // The session's one GL context stays (render/arena.ts): free what this
+    // duel uploaded, keep the compiled programs + cached GLB geometry.
+    release();
   }
 
   function onResize(): void {
@@ -2611,14 +2631,30 @@ function runDuel(
       camera.position.add(_shk);
       camera.rotateZ(amp * 0.3 * Math.sin(t * 1.7));
       camera.updateMatrixWorld();
-      render();
+      draw();
       camera.position.copy(camSaved.p);
       camera.quaternion.copy(camSaved.q);
       camera.updateMatrixWorld();
     } else {
       shakeAmp = 0;
-      render();
+      draw();
     }
   }
+  // First draw waits for prepare(): from the first animation frame (the
+  // cached GLB rigs + set have swapped in by then) the scene's new shaders
+  // compile off the main thread; a warm session resolves at once. Before
+  // that a draw would compile synchronously (the old round-start freeze).
+  let drawState: "setup" | "wait" | "compiling" | "live" = "setup";
+  function draw(): void {
+    if (drawState === "live") { render(); return; }
+    if (drawState !== "wait") return;
+    drawState = "compiling";
+    void prepare(scene).then(() => {
+      if (!alive) return;
+      drawState = "live";
+      renderer.domElement.style.visibility = "";
+    });
+  }
   frame();
+  drawState = "wait";
 }

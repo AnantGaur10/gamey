@@ -16,6 +16,7 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { addDirtDetail } from "./arena";
+import { retireMaterial } from "./gpu";
 
 export interface HellHandle {
   /** Absolute time in seconds (lava flow, glow pulse, light flicker). */
@@ -302,7 +303,8 @@ export function enterHell(scene: THREE.Scene, playerAt: THREE.Vector3, foeAt: TH
       horns.dispose();
       vols.dispose();
       caps.dispose();
-      for (const d of disposables) d.dispose();
+      // Materials go through retireMaterial: the shader programs stay for the next hell (gpu.ts).
+      for (const d of disposables) (d as THREE.Material).isMaterial ? retireMaterial(d as THREE.Material) : d.dispose();
     },
   };
 }

@@ -1,4 +1,4 @@
-import { defaultProgress, type PortalAdapter, type Progress } from "./PortalAdapter";
+import { defaultProgress, type DeviceInfo, type PortalAdapter, type Progress } from "./PortalAdapter";
 import { createNoopAdapter } from "./NoopAdapter";
 import { ADS_ENABLED, CG_SDK_URL, SDK_LOAD_TIMEOUT_MS } from "./config";
 import { safeLoad } from "../store/SafeStore";
@@ -18,7 +18,11 @@ interface CgSdk {
     requestAd(type: "midgame" | "rewarded", cb: { adStarted?: () => void; adFinished?: () => void; adError?: (e: { code?: string }) => void }): void;
   };
   data: { getItem(k: string): string | null; setItem(k: string, v: string): void };
-  user: { isUserAccountAvailable: boolean; getUser(): Promise<CgUser | null> };
+  user: {
+    isUserAccountAvailable: boolean;
+    getUser(): Promise<CgUser | null>;
+    systemInfo?: { device?: { type?: string }; os?: { name?: string } };
+  };
 }
 
 const KEY = "gamey.v1";
@@ -123,6 +127,14 @@ export function createCrazyGamesAdapter(): PortalAdapter {
     },
     getUser() {
       return user;
+    },
+    deviceInfo(): DeviceInfo | null {
+      return safe((s) => {
+        const info = s.user.systemInfo;
+        const type = info?.device?.type;
+        if (type !== "desktop" && type !== "tablet" && type !== "mobile") return null;
+        return { type, os: info?.os?.name ?? "" };
+      }, () => null);
     },
   };
 }

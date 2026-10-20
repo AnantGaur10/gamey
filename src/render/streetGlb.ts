@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { stagePositions, addDirtDetail } from "./arena";
+import { keepOnGpu } from "./gpu";
 
 /** Blender street set (scripts/blender/build_street.py) + its ambient life. */
 export interface StreetSet {
@@ -18,16 +19,51 @@ export interface StreetSet {
 // Like the cowboys, Blender fronts (+Y) arrive as -Z: inner yaw of PI aims
 // the storefronts at +Z toward the duel, matching the procedural seam.
 // Node-local axes (glTF): screen-right = -x, up = +y, toward camera = -z.
+// Parsed once per session and cloned per duel (geometry shared, never
+// mutated or disposed here): a new round neither re-fetches nor re-parses
+// the 1.3MB set. Same scheme as setGlb.ts.
+const cache = new Map<string, Promise<THREE.Group | null>>();
+const parsed = new Set<string>();
+function loadScene(url: string): Promise<THREE.Group | null> {
+  let p = cache.get(url);
+  if (!p) {
+    p = (async () => {
+      try {
+        const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+        const scene = (await new GLTFLoader().loadAsync(url)).scene;
+        keepOnGpu(scene); // shared by every clone: stays uploaded across rounds
+        parsed.add(url);
+        return scene;
+      } catch (err) {
+        cache.delete(url);
+        if (import.meta.env.DEV) console.warn(`[gamey] street GLB failed: ${url}`, err);
+        return null;
+      }
+    })();
+    cache.set(url, p);
+  }
+  return p;
+}
+
+/** True once the street is parsed this session: a duel can skip the
+    procedural stand-in (the clone lands before the first frame). */
+export function streetGlbReady(url: string): boolean {
+  return parsed.has(url);
+}
+
+/** Start fetching the street early (tutorial / series start). */
+export function preloadStreetGlb(url: string): void {
+  void loadScene(url);
+}
+
 export async function loadStreetGlb(
   url: string,
   distM: number,
 ): Promise<StreetSet | null> {
   try {
-    const { GLTFLoader } = await import(
-      "three/examples/jsm/loaders/GLTFLoader.js"
-    );
-    const gltf = await new GLTFLoader().loadAsync(url);
-    const inner = gltf.scene;
+    const tpl = await loadScene(url);
+    if (!tpl) return null;
+    const inner = tpl.clone(true);
     inner.rotation.y = Math.PI;
     const group = new THREE.Group();
     group.add(inner);
@@ -55,9 +91,8 @@ export async function loadStreetGlb(
     inner.traverse((o) => {
       const m = o as THREE.Mesh;
       if (!m.isMesh) return;
-      const old = m.material as THREE.Material;
-      m.material = old.name === "M_Glow" ? glow : paint;
-      old.dispose();
+      // The loader's material stays on the cached template (never rendered).
+      m.material = (m.material as THREE.Material).name === "M_Glow" ? glow : paint;
     });
 
     const node = (n: string) => inner.getObjectByName(n) ?? null;

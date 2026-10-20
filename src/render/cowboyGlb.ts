@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { makeGunHolster, type Cowboy } from "./cowboy";
 import { addRimLight } from "./arena";
+import { keepOnGpu } from "./gpu";
 import { pivotMesh, type SwayNode } from "./sway";
 
 // Loads a Blender-exported cowboy GLB and adapts it to the Cowboy seam so
@@ -46,15 +47,44 @@ function rimLambert(color: THREE.Color | undefined): THREE.MeshLambertMaterial {
   return m;
 }
 
+// Parsed GLBs are cached per session and cloned per cowboy (geometry and
+// clips shared, never mutated: paintGun clones before it repaints), so a
+// new round neither re-fetches nor re-parses its two rigs.
+type Gltf = { scene: THREE.Group; animations: THREE.AnimationClip[] };
+const templates = new Map<string, Promise<Gltf | null>>();
+function loadTemplate(url: string): Promise<Gltf | null> {
+  let p = templates.get(url);
+  if (!p) {
+    p = (async () => {
+      try {
+        const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+        const gltf = await new GLTFLoader().loadAsync(url);
+        keepOnGpu(gltf.scene); // shared by every clone: stays uploaded across rounds
+        return gltf;
+      } catch (err) {
+        templates.delete(url); // a later round may retry (flaky network)
+        if (import.meta.env.DEV) console.warn(`[gamey] cowboy GLB failed: ${url}`, err);
+        return null;
+      }
+    })();
+    templates.set(url, p);
+  }
+  return p;
+}
+
+/** Start fetching a rig early (boot, series start) so its duel swaps fast. */
+export function preloadCowboyGlb(url: string): void {
+  void loadTemplate(url);
+}
+
 export async function loadCowboyGlb(
   url: string,
   prefix: "H" | "O",
 ): Promise<CowboyGlb | null> {
   try {
-    const { GLTFLoader } = await import(
-      "three/examples/jsm/loaders/GLTFLoader.js"
-    );
-    const gltf = await new GLTFLoader().loadAsync(url);
+    const tpl = await loadTemplate(url);
+    if (!tpl) return null;
+    const gltf = { scene: tpl.scene.clone(true), animations: tpl.animations };
     const inner = gltf.scene;
     // Cull collection-leak stowaways at any depth (e.g. St_Sign_* street
     // texts once shipped inside cowboy_outlaw.glb, floating above the head
@@ -267,6 +297,16 @@ export function swapCowboy(
   next.armR.rotation.copy(oldC.armR.rotation);
   next.elbowR.rotation.copy(oldC.elbowR.rotation);
   scene.remove(oldC.group);
+  // The procedural stand-in owns its geometry + materials: free their GPU
+  // side now (the session context outlives the duel). GLB rigs share theirs.
+  if (!("mixer" in oldC)) {
+    oldC.group.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      m.geometry.dispose();
+      (Array.isArray(m.material) ? m.material : [m.material]).forEach((x) => x.dispose());
+    });
+  }
   scene.add(next.group);
   return next;
 }

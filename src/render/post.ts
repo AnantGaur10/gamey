@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { FXAAShader } from "three/examples/jsm/shaders/FXAAShader.js";
+import { retireMaterial } from "./gpu";
 
 // Post chain (user 2026-10-06, "MSAA is very expensive ... use FXAA"): the
 // scene renders into an 8-bit target (no MSAA), then ONE fullscreen
@@ -113,7 +114,7 @@ export function createPost(renderer: THREE.WebGLRenderer): Post | null {
       dispose() {
         sceneRT.dispose();
         tri.dispose();
-        mat.dispose();
+        retireMaterial(mat); // keeps the FXAA program for the next arena (gpu.ts)
       },
     };
   } catch (err) {
