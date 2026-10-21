@@ -55,33 +55,19 @@ export function createAudioManager(): AudioManager {
     }
   }
 
-  // Music files land in Phase 3 (tail); until then HEAD-probe first so a
-  // missing file is a silent skip, never a console 404 (QA noise). URL is
-  // BASE_URL-relative (relative-paths-only portal rule — never absolute).
-  // One probe per file per session (was one per play: a HEAD request on
-  // every hit, a wasted round trip each on slow mobile data).
-  const probed = new Map<string, Promise<string | null>>();
-  function resolveMusicUrl(filename: string): Promise<string | null> {
-    let p = probed.get(filename);
-    if (!p) {
-      p = (async () => {
-        try {
-          const url = `${import.meta.env.BASE_URL}assets/music/${filename}`;
-          const res = await fetch(url, { method: "HEAD" });
-          return res.ok ? url : null;
-        } catch {
-          return null;
-        }
-      })();
-      probed.set(filename, p);
-    }
-    return p;
+  // Music files land in Phase 3 (tail). Only files that ship are ever
+  // requested (`__MUSIC_FILES__`, listed at build time by vite.config.ts):
+  // the old HEAD probe still logged "Failed to load resource" (404) in the
+  // console on every prod load. URL is BASE_URL-relative (relative-paths-
+  // only portal rule — never absolute).
+  function resolveMusicUrl(filename: string): string | null {
+    return __MUSIC_FILES__.includes(filename) ? `${import.meta.env.BASE_URL}assets/music/${filename}` : null;
   }
 
   async function loadMusicTrack(track: MusicTrack): Promise<HTMLAudioElement | null> {
     try {
       const filename = track === 'home-screen' ? 'home-screen.mp3' : 'duel.mp3';
-      const url = await resolveMusicUrl(filename);
+      const url = resolveMusicUrl(filename);
       if (!url) return null;
       const audio = new Audio(url);
       audio.loop = true;
@@ -362,7 +348,7 @@ export function createAudioManager(): AudioManager {
       if (muted) return;
 
       const filename = sfx === 'hit-body' ? 'hit-body.mp3' : 'hit-head.mp3';
-      const url = await resolveMusicUrl(filename);
+      const url = resolveMusicUrl(filename);
       if (!url) return;
       const audio = new Audio(url);
       audio.volume = volume;

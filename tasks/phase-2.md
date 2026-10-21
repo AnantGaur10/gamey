@@ -43,10 +43,10 @@ Gates for EVERY slice: `npm test` (= typecheck + build:basic + size:basic <20MB)
 - [x] Night keeps ~15% enemy ambient + rim + muzzle flash. DPR-1 readability check MANDATORY (QA fail risk).
 - [x] Verify: ai-play screenshots per round show the grade; mobile legible.
 
-## Slice 6 — Hell sudden-death (double KO) — DONE except the live-fired verify
+## Slice 6 — Hell sudden-death (double KO) — DONE
 - [x] Lazy chunk loaded AFTER `GameplayStart` (never in initial payload — QA gate). Dark rock ground, emissive scrolling lava strips (shader, no particles), red fog/lighting, black-red sky.
 - [x] Locked rule (`context/2026-09-24.md` §12): lethal-in-flight-fired-before-death counts, must actually hit; hell rounds 1-bullet each, both-miss loops until someone hits; winner takes point.
-- [ ] PENDING — Verify: forced double-KO test → hell loads, loop resolves, winner takes point. (hell is implemented — context/2026-09-30.md §5 Slice 6 — but the loop was only code-reviewed, never live-fired.)
+- [x] Verify: forced double-KO test → hell loads, loop resolves, winner takes point (`tests/duel-hell.spec.ts`, context/2026-10-21.md §5).
 
 ## Slice 7 — Economy + revive UI — DONE
 - [x] Real `award()` gold flow. Shop prices: TBD — propose numbers, get user approval before locking.
@@ -61,8 +61,8 @@ Gates for EVERY slice: `npm test` (= typecheck + build:basic + size:basic <20MB)
 - [x] Mixer playback in `cowboyGlb.ts` (+ procedural no-op path so behavior identical without GLB).
 - [x] Verify: clips play on GLB builds, fallback identical, re-export audit zero strays, size PASS.
 
-## Slice 9 — QA sweep (after all slices) — PARTIAL
+## Slice 9 — QA sweep (after all slices) — DONE
 - [x] `qa.html` iframe matrix (all sizes incl. 800x450 mobile, DPR-1), portrait side-bars.
-- [ ] PENDING — Night-round readability, hell-round readability (code paths exist; no recorded DPR-1 readability pass at night/hell yet).
-- [ ] PENDING — AdBlock run (basic, no dead buttons), private-mode storage run (covered by design per context/2026-09-30.md §5 Slice 9 — SafeStore memory fallback; never actually run in a browser).
+- [x] Night-round readability, hell-round readability at DPR 1 (context/2026-10-21.md §4-5).
+- [x] AdBlock run + private-mode storage run on the prod build, 15/15 clean (context/2026-10-21.md §5).
 - [x] Append results to `context/YYYY-MM-DD.md` (same-day file, append never overwrite).

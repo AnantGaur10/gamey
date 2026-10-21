@@ -1,3 +1,4 @@
+import { readdirSync } from "node:fs";
 import { defineConfig, type Plugin } from "vite";
 import type { OutputChunk } from "rollup";
 
@@ -31,9 +32,23 @@ function preloadGameChunks(): Plugin {
   };
 }
 
+/** Music tracks that actually ship (public/assets/music): AudioManager
+    requests only these. A probe for a missing file logged a console 404 on
+    every prod load (2026-10-21). */
+function musicFiles(): string[] {
+  try {
+    return readdirSync("public/assets/music").filter((f) => /\.(mp3|ogg)$/i.test(f));
+  } catch {
+    return [];
+  }
+}
+
 export default defineConfig({
   base: "./",
   plugins: [preloadGameChunks()],
+  define: {
+    __MUSIC_FILES__: JSON.stringify(musicFiles()),
+  },
   server: {
     port: 5174,
   },

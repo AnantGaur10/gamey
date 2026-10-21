@@ -180,9 +180,10 @@ export class DuelMachine {
       to the rim (user ask 2026-10-05): SPREAD_RIM_P of shots land in the
       outer ring (SPREAD_INNER_R..1 of the radius), the rest in the middle,
       each area-uniform. A uniform disc put 64% in the middle, so a big
-      crosshair still mostly hit dead centre. */
-  sampleSpread(): { dx: number; dy: number } {
-    const r = (this.bloomDeg * Math.PI) / 180;
+      crosshair still mostly hit dead centre. `capDeg` clamps the disc (the
+      player's ring never outgrows the foe: home.ts spreadCapDeg). */
+  sampleSpread(capDeg = Infinity): { dx: number; dy: number } {
+    const r = (Math.min(this.bloomDeg, capDeg) * Math.PI) / 180;
     const a = this.rng() * Math.PI * 2;
     const u = this.rng();
     const k = SPREAD_INNER_R;

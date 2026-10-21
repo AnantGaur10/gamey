@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { createArena, stagePositions, faceToward, cssSkyForRound, createShadowDecal, type ShadowDecal } from "../render/arena";
 import { createSway, type Sway } from "../render/sway";
 import { createCowboy, paintGun, type Cowboy } from "../render/cowboy";
-import { loadCowboyGlb, preloadCowboyGlb, swapCowboy, type CowboyGlb } from "../render/cowboyGlb";
+import { loadCowboyGlb, preloadCowboyGlb, swapCowboy, type CowboyGlb, type CowboyDims } from "../render/cowboyGlb";
 import { loadStreetGlb, streetGlbReady, type StreetSet } from "../render/streetGlb";
 import { loadMapSet, preloadSet, type MapSet } from "../render/setGlb";
 import { MAPS, MAP_CHOICES, pickMap, mapLabel, isMapChoice, cssSky, type MapId, type MapChoice } from "../render/maps";
@@ -15,7 +15,7 @@ import { DuelMachine, type WoundPose } from "../game/DuelMachine";
 import { bodyDamage, BASE_HP, LIFESTEAL_CAP_PER_HIT, DUEL_RANGE_MIN, DUEL_RANGE_MAX } from "../game/damage";
 import { GUNS, AI_ROSTER, GOLD_WIN_BESTOF, GOLD_WIN_DEATHMATCH, GOLD_LOSS_CONSOLATION, GOLD_KILL_BONUS, reviveDeathPrice } from "../game/economy";
 import { LEVELS, LEVEL_COUNT, playableLevel, levelAi, levelClearGold } from "../game/levels";
-import { ProjectileSim, testCapsuleHit, CAPSULE_FOR_POSE, capsuleMid, type BulletState } from "../game/projectiles";
+import { ProjectileSim, testCapsuleHit, predictHit, CAPSULE_FOR_POSE, capsuleMid, DEFAULT_HAT, type BulletState } from "../game/projectiles";
 import { LocalTransport } from "../game/Transport";
 import type { PortalAdapter } from "../portal/PortalAdapter";
 import { mountFocusUI, isCoarsePointer, type FocusUI } from "./focus";
@@ -209,6 +209,13 @@ function showMapPicker(root: HTMLElement, adapter: PortalAdapter, audio: AudioMa
   page.querySelector("[data-b=back]")!.addEventListener("click", () => showHome(root, adapter, audio));
 }
 
+/** Hat hit volume + silhouette width in use: the GLB's measured numbers,
+    else the outlaw's (procedural stand-in before / without its GLB). */
+const FALLBACK_DIMS: CowboyDims = { hat: DEFAULT_HAT, halfWidth: 0.46 };
+function dimsOf(c: Cowboy): CowboyDims {
+  return (c as Partial<CowboyGlb>).dims ?? FALLBACK_DIMS;
+}
+
 /** Shop icons (user 2026-10-14): revolvers in their finish (render/cowboy
     GUN_FINISH: lifesteal red, gold gold), the revive token as a first aid kit. */
 function gunIcon(id: string): string {
@@ -217,29 +224,57 @@ function gunIcon(id: string): string {
 }
 const AID_KIT_ICON = `<svg class="sicon" viewBox="0 0 48 36" aria-hidden="true"><path d="M17 8V4h14v4" fill="none" stroke="#1a0f06" stroke-width="5"/><path d="M17 8V4h14v4" fill="none" stroke="#e9e2d2" stroke-width="2.5"/><rect x="3" y="8" width="42" height="26" rx="4" fill="#f2ede3" stroke="#1a0f06" stroke-width="2"/><path d="M20 13h8v6h6v8h-6v6h-8v-6h-6v-8h6z" transform="translate(0 -2)" fill="#d22a20" stroke="#7a120c" stroke-width="1"/></svg>`;
 
+/** Armory cards (user 2026-10-21): one card per revolver, stat bars
+    straight from GUNS (damage, accuracy = the tightest Focus ring, fire
+    rate = 1 / cooldown), perk line, BUY or a checkbox EQUIP button. */
+const SHOP_GUNS: Array<{ id: "default" | "lifesteal" | "gold"; name: string; perk: string }> = [
+  { id: "default", name: "STARTER", perk: "Hits hardest, fires fastest." },
+  { id: "lifesteal", name: "LIFESTEAL", perk: `Every body hit heals ${GUNS.lifesteal.extraValue * 100}% of the damage (max ${LIFESTEAL_CAP_PER_HIT}).` },
+  { id: "gold", name: "GOLD", perk: `+${Math.ceil(GOLD_KILL_BONUS * GUNS.gold.extraValue)} gold for every round you win.` },
+];
+const CHECK_ICON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+function gunCard(id: (typeof SHOP_GUNS)[number]["id"], name: string, perk: string, owned: boolean, equipped: boolean, price: number, afford: boolean): string {
+  const g = GUNS[id];
+  const tightest = Math.min(...SHOP_GUNS.map((s) => GUNS[s.id].bloomMinDeg));
+  const acc = Math.round((100 * tightest) / g.bloomMinDeg);
+  const rate = 1000 / g.cooldownMs;
+  const bar = (label: string, frac: number, value: string) =>
+    `<div class="gstat"><span>${label}</span><i><b style="width:${Math.round(Math.min(1, frac) * 100)}%"></b></i><em>${value}</em></div>`;
+  const action = !owned
+    ? `<button class="gbuy${afford ? "" : " poor"}" data-buy="${id}">BUY · ${price}g</button>`
+    : `<button class="gequip" data-equip="${id}" role="checkbox" aria-checked="${equipped}"><span class="gbox">${equipped ? CHECK_ICON : ""}</span>${equipped ? "EQUIPPED" : "EQUIP"}</button>`;
+  return `<div class="gcard g-${id}${equipped ? " on" : ""}">
+    <div class="ghead">${gunIcon(id)}<span>${name}</span></div>
+    ${bar("DAMAGE", g.baseDamage / 60, String(g.baseDamage))}
+    ${bar("ACCURACY", acc / 100, String(acc))}
+    ${bar("FIRE RATE", rate / 3, `${rate.toFixed(1)}/s`)}
+    <div class="gperk">${perk}</div>
+    ${action}
+  </div>`;
+}
+
 function showShop(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager): void {
   root.innerHTML = "";
   const p = adapter.loadProgress();
   showMenuScene(isMapChoice(p.settings.map) ? p.settings.map : "random", p.equippedGun);
   const can = (price: number) => p.gold >= price;
+  const priceOf = (id: string) => (id === "lifesteal" ? SHOP_PRICES.lifesteal : id === "gold" ? SHOP_PRICES.gold : 0);
+  const cards = SHOP_GUNS.map((s) => gunCard(s.id, s.name, s.perk, p.gunsOwned.includes(s.id), p.equippedGun === s.id, priceOf(s.id), can(priceOf(s.id)))).join("");
   const shop = el(`<div class="shop">
     <h2>ARMORY</h2>
-    <div>Gold: <b>${p.gold}</b> · ${AID_KIT_ICON} Revive token: <b>${p.reviveToken}</b></div>
-    <div>Guns owned: ${p.gunsOwned.join(", ")} · Equipped: ${p.equippedGun}</div>
+    <div class="sgold">Gold: <b>${p.gold}</b></div>
     <div class="note">${storagePersisted() ? "" : "Won't save in private mode (inline note, never a popup)."}</div>
-    <div class="srow"><button data-b="buy-life">${gunIcon("lifesteal")}LIFESTEAL GUN — ${SHOP_PRICES.lifesteal}g (heal 20% of dealt, cap 15/hit, weaker 38dmg)</button></div>
-    <div class="srow"><button data-b="buy-gold">${gunIcon("gold")}GOLD GUN — ${SHOP_PRICES.gold}g (+40% gold, weaker 37dmg)</button></div>
-    <div class="srow"><button data-b="buy-revive">${AID_KIT_ICON}REVIVE TOKEN — ${SHOP_PRICES.revive}g (max 1 held, once per game)</button></div>
-    <div class="srow"><button data-b="equip-default">${gunIcon("default")}EQUIP DEFAULT</button> <button data-b="equip-life">${gunIcon("lifesteal")}EQUIP LIFESTEAL</button> <button data-b="equip-gold">${gunIcon("gold")}EQUIP GOLD</button></div>
+    <div class="gcards">${cards}</div>
+    <div class="srow"><button data-b="buy-revive">${AID_KIT_ICON}REVIVE TOKEN · ${SHOP_PRICES.revive}g <small>held ${p.reviveToken}/1 · once per game</small></button></div>
     ${adapter.adsEnabled ? `<div class="srow"><button data-b="ad-gold">WATCH AD FOR +10g</button></div>` : ``}
     <div class="smsg"></div>
-    <div class="srow"><button data-b="tutorial">REPLAY TUTORIAL</button></div>
-    <button data-b="back">BACK</button>
+    <div class="srow"><button data-b="tutorial">REPLAY TUTORIAL</button><button data-b="back">BACK</button></div>
   </div>`);
   root.appendChild(shop);
   const msg = shop.querySelector(".smsg") as HTMLElement;
   const refresh = () => showShop(root, adapter, audio);
-  const buy = (id: "lifesteal" | "gold", price: number) => {
+  const buy = (id: string, price: number) => {
     const q = adapter.loadProgress();
     if (q.gunsOwned.includes(id)) { msg.textContent = "Already owned — equip it."; return; }
     if (!can(price)) { msg.textContent = "Not enough gold — win duels first (never gated, starter is competitive)."; return; }
@@ -248,8 +283,7 @@ function showShop(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager
     adapter.saveProgress(q);
     refresh();
   };
-  shop.querySelector("[data-b=buy-life]")!.addEventListener("click", () => buy("lifesteal", SHOP_PRICES.lifesteal));
-  shop.querySelector("[data-b=buy-gold]")!.addEventListener("click", () => buy("gold", SHOP_PRICES.gold));
+  shop.querySelectorAll<HTMLElement>("[data-buy]").forEach((b) => b.addEventListener("click", () => buy(b.dataset.buy!, priceOf(b.dataset.buy!))));
   shop.querySelector("[data-b=buy-revive]")!.addEventListener("click", () => {
     const q = adapter.loadProgress();
     if (q.reviveToken >= 1) { msg.textContent = "Already holding 1 (max)."; return; }
@@ -262,13 +296,12 @@ function showShop(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager
   const equip = (id: string) => {
     const q = adapter.loadProgress();
     if (!q.gunsOwned.includes(id)) { msg.textContent = `Buy it first.`; return; }
+    if (q.equippedGun === id) return;
     q.equippedGun = id;
     adapter.saveProgress(q);
     refresh();
   };
-  shop.querySelector("[data-b=equip-default]")!.addEventListener("click", () => equip("default"));
-  shop.querySelector("[data-b=equip-life]")!.addEventListener("click", () => equip("lifesteal"));
-  shop.querySelector("[data-b=equip-gold]")!.addEventListener("click", () => equip("gold"));
+  shop.querySelectorAll<HTMLElement>("[data-equip]").forEach((b) => b.addEventListener("click", () => equip(b.dataset.equip!)));
   const adBtn = shop.querySelector("[data-b=ad-gold]");
   if (adBtn && adapter.adsEnabled) {
     adBtn.addEventListener("click", async () => {
@@ -631,7 +664,7 @@ function runDuel(
   hud.appendChild(cross);
   hud.appendChild(spreadCross);
   root.appendChild(hud);
-  const roundLine = el(`<div class="roundline" style="position:absolute;top:calc(76px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);font-size:13px;font-weight:700;letter-spacing:.1em;color:#ffe9bd;text-shadow:0 1px 4px rgba(60,20,5,.9);pointer-events:none;"></div>`);
+  const roundLine = el(`<div class="roundline" style="position:absolute;top:calc(76px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);font-size:13px;font-weight:700;letter-spacing:.1em;color:#ffe9bd;text-shadow:0 1px 2px #000,0 0 8px rgba(0,0,0,.95),0 0 3px rgba(0,0,0,.9);pointer-events:none;"></div>`); // dark halo: readable over the full moon (2026-10-21)
   root.appendChild(roundLine);
   function paintRound(): void {
     // The round's distance shows on every line: it varies 6-25m (user 2026-10-05).
@@ -940,6 +973,12 @@ function runDuel(
       /** Current map + foe outfit. */
       where: () => ({ map: mapId, foe: foeLook.id, set: !!mapSet || !!street || !!hellSet }),
       state: () => ({ phase: machine.phase, roundOver, playerHP, foeHP, ammo, foeAmmo, hell: hellRound, live: sim.bullets.filter((b) => b.alive).length, night: nightBlind, fog: (scene.fog as THREE.FogExp2).density, distM }),
+      /** Force the player's bloom (hitbox checks; set it in the same task as the click). */
+      bloom: (deg: number) => { machine.bloomDeg = deg; },
+      /** Hat hit volume + half-width in use (measured per GLB), live spread cap. */
+      dims: (side: "player" | "foe") => ({ ...dimsOf(side === "player" ? player : foe), capDeg: spreadCapDeg(), glb: "dims" in (side === "player" ? player : foe) }),
+      /** Set both duelists' HP (double-KO repro: 1/1 makes any hit lethal). */
+      hp: (p: number, f: number) => { playerHP = p; foeHP = f; paintBars(); },
       /** Revolver state + world position (quick-draw checks). */
       gun: (side: "player" | "foe") => {
         const c = side === "player" ? player : foe;
@@ -1039,6 +1078,16 @@ function runDuel(
         const cap = CAPSULE_FOR_POSE[side === "player" ? playerWound : foeWound];
         const y = part === "head" ? cap.headY : capsuleMid(cap);
         const s = project(feet.clone().add(new THREE.Vector3(0, y, 0)));
+        return { x: s.x, y: s.y };
+      },
+      /** Screen px of a point `dy` above the head centre, `lateral` m along
+          the camera's right (hat hitbox checks: brim edge, crown top). */
+      aimHead: (side: "player" | "foe", dy: number, lateral = 0) => {
+        const feet = side === "player" ? stage.player : stage.foe;
+        const cap = CAPSULE_FOR_POSE[side === "player" ? playerWound : foeWound];
+        camera.updateMatrixWorld();
+        const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).setY(0).normalize();
+        const s = project(feet.clone().add(new THREE.Vector3(0, cap.headY + dy, 0)).addScaledVector(right, lateral));
         return { x: s.x, y: s.y };
       },
       /** Set a wound pose INSTANTLY (no chase) and measure it: head/pelvis/
@@ -1252,6 +1301,22 @@ function runDuel(
     void cue.offsetWidth; // reflow so the animation restarts
     cue.classList.add("pop");
   }
+  /** Long cues ("OUT OF AMMO — YOU TAKE IT", 550px at 32px) ran over both
+      HP bars at 800-907px: shrink the font to the gap between the bars
+      (their inner badges included), never below CUE_MIN_PX. Runs on every
+      text change (observer) and resize; the text itself is untouched. */
+  const CUE_MIN_PX = 16;
+  const CUE_BADGE_PX = 18;
+  function fitCue(): void {
+    cue.style.fontSize = "";
+    const a = hp.querySelector(".you")!.getBoundingClientRect(), b = hp.querySelector(".foe")!.getBoundingClientRect();
+    const room = b.left - a.right - 2 * CUE_BADGE_PX;
+    const w = cue.offsetWidth;
+    if (room <= 0 || w <= room) return;
+    cue.style.fontSize = `${Math.max(CUE_MIN_PX, Math.floor((parseFloat(getComputedStyle(cue).fontSize) * room) / w))}px`;
+  }
+  const cueFit = new MutationObserver(fitCue);
+  cueFit.observe(cue, { childList: true, characterData: true, subtree: true });
   const sub = hud.querySelector(".sub") as HTMLElement;
   const youBar = hp.querySelector(".you i") as HTMLElement;
   const foeBar = hp.querySelector(".foe i") as HTMLElement;
@@ -1378,11 +1443,21 @@ function runDuel(
   }
   updateZone();
 
+  /** Spread ceiling (deg): the angle half the foe's widest extent subtends
+      from the camera, so the ring is never wider than the foe at this range
+      (user 2026-10-21). Shown ring and real spread both clamp to it; Focus
+      and the QTE keep the raw bloom, so focusing still pays below it. */
+  function spreadCapDeg(): number {
+    const mid = _vCap.copy(stage.foe).setY(stage.foe.y + capsuleMid(CAPSULE_FOR_POSE[foeWound]));
+    return (Math.atan(dimsOf(foe).halfWidth / camera.position.distanceTo(mid)) * 180) / Math.PI;
+  }
+  const _vCap = new THREE.Vector3();
+
   // Crosshair diameter in CSS px: bloom is an angle, so on the perspective
   // camera it is (nearly) depth-independent.
   function crossPx(): number {
     const toAim = camera.position.distanceTo(aimWorld);
-    const worldR = Math.tan((machine.bloomDeg * Math.PI) / 180) * toAim;
+    const worldR = Math.tan((Math.min(machine.bloomDeg, spreadCapDeg()) * Math.PI) / 180) * toAim;
     return Math.max(3, (2 * worldR) / worldPerPxAt(aimWorld)); // 3px floor: a 0.03° focus must still read as nearly a dot
   }
 
@@ -2012,7 +2087,7 @@ function runDuel(
     // circle. Offset across the SCREEN (camera right/up) at the target's
     // depth. It used to be world x/y scaled by 1/40, so shots hugged the
     // centre dot whatever the crosshair size (user report 2026-10-06).
-    const spread = machine.sampleSpread();
+    const spread = machine.sampleSpread(spreadCapDeg());
     const camDist = camera.position.distanceTo(target);
     camera.updateMatrixWorld();
     target
@@ -2023,6 +2098,10 @@ function runDuel(
 
   function attemptFire(cx: number, cy: number): void {
     if (roundOver) return;
+    // Dead but the round still open (own lethal bullet in flight, maybeEnd
+    // waits up to 650ms): a corpse used to keep shooting, and a post-mortem
+    // kill read as a double KO -> sudden death.
+    if (playerHP <= 0) return;
     if (machine.phase !== "draw" && machine.phase !== "fire") return;
     if (drawTick < 0 || machine.tick - drawTick < DRAW_TICKS) return; // gun still clearing the holster
     if (ammo <= 0) return;
@@ -2049,10 +2128,10 @@ function runDuel(
     showSpreadCross(cx, cy);
     gunsmoke.spawn(muzzle);
   // Lethal-if-it-hits at fire time (locked double-KO rule): head always
-  // lethal; body lethal iff post-falloff damage >= foe HP now.
-  const { head } = foeScreen();
-    const dHead = Math.hypot(cx - head.x, cy - head.y);
-    const headAim = dHead <= 90;
+    // lethal; body lethal iff post-falloff damage >= foe HP now. "Head" is
+    // the bullet's predicted path through the head + hat zone (it was any
+    // click within 90px of the head centre).
+    const headAim = predictHit(muzzle, dir, distM, stage.foe, CAPSULE_FOR_POSE[foeWound], dimsOf(foe).hat, STEP / BULLET_SUBSTEPS) === "head";
     const lethal = headAim || bodyDamage(gun.baseDamage, distM) >= foeHP;
     const b = sim.fire({ from: muzzle, dir, distM, shooter: "player", gunId: gun.id, lethal });
     if (b) {
@@ -2080,11 +2159,14 @@ function runDuel(
       paintBars();
       const muzzle = foe.gunTip.getWorldPosition(new THREE.Vector3());
       muzzle.y = Math.max(muzzle.y, 0.12); // prone muzzle can sit at the dirt line
-      // Aim at the (possibly wounded/lowered) player capsule mid, preserving
-      // the old +0.12 bias above mid that the 1.35 constant encoded. Scatter
-      // = hand wobble (accuracyMult) + the foe's own bloom, same rules as the
-      // player's crosshair (user 2026-10-06).
-      const pMid = capsuleMid(CAPSULE_FOR_POSE[playerWound]) + 0.12;
+      // Aim at the (possibly wounded/lowered) player capsule mid, 7cm low.
+      // It was +0.12 high, but once head priority stopped the body's top cap
+      // swallowing head-bound bullets (projectiles.ts) the same scatter
+      // turned 0.3-2% foe headshots into 4-10% (sim, 2026-10-21); -0.07
+      // keeps them at 2-4% with body hits unchanged. Scatter = hand wobble
+      // (accuracyMult) + the foe's own bloom, same rules as the player's
+      // crosshair (user 2026-10-06).
+      const pMid = capsuleMid(CAPSULE_FOR_POSE[playerWound]) - 0.07;
       const target = stage.player.clone().add(new THREE.Vector3(0, pMid, 0));
       const dir = foeAimDir(muzzle, target, 0.03 * ai.accuracyMult);
       foeAim.applyShotKick();
@@ -2146,7 +2228,7 @@ function runDuel(
     for (const b of sim.bullets) {
       if (!b.alive) continue;
       if (b.shooter === "player" && foeHP > 0) {
-        const r = testCapsuleHit(b.pos, stage.foe, CAPSULE_FOR_POSE[foeWound]);
+        const r = testCapsuleHit(b.pos, stage.foe, CAPSULE_FOR_POSE[foeWound], dimsOf(foe).hat, b.vel);
         if (r.head || r.body) {
           sim.kill(b);
           const point = new THREE.Vector3(r.point[0], r.point[1], r.point[2]);
@@ -2162,7 +2244,7 @@ function runDuel(
           }
         }
       } else if (b.shooter === "foe" && playerHP > 0) {
-        const r = testCapsuleHit(b.pos, stage.player, CAPSULE_FOR_POSE[playerWound]);
+        const r = testCapsuleHit(b.pos, stage.player, CAPSULE_FOR_POSE[playerWound], dimsOf(player).hat, b.vel);
         if (r.head || r.body) {
           sim.kill(b);
           const point = new THREE.Vector3(r.point[0], r.point[1], r.point[2]);
@@ -2333,6 +2415,7 @@ function runDuel(
     window.removeEventListener("resize", onResize);
     vv?.removeEventListener("resize", onResize);
     root.removeEventListener("pointerdown", onPointerDown);
+    cueFit.disconnect();
     root.removeEventListener("pointermove", onPointerMove);
     root.removeEventListener("pointerup", onPointerUp);
     root.removeEventListener("pointercancel", onPointerUp);
@@ -2350,6 +2433,7 @@ function runDuel(
   function onResize(): void {
     fitCamera();
     updateZone();
+    fitCue();
   }
   window.addEventListener("resize", onResize);
   // Browser zoom / pinch fires visualViewport.resize, not window.resize —

@@ -93,7 +93,8 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 .hud .sub {
   position: absolute; top: calc(52px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
   font-size: 15px; opacity: 0.95; color: #fff2dc;
-  text-shadow: 0 1px 4px rgba(60, 20, 5, 0.9);
+  /* Dark halo, not just a drop: it sits on the full moon at night (2026-10-21). */
+  text-shadow: 0 1px 2px #000, 0 0 8px rgba(0, 0, 0, 0.95), 0 0 3px rgba(0, 0, 0, 0.9);
   white-space: nowrap;
 }
 .cylinder {
@@ -302,6 +303,46 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 .shop button:active { transform: scale(0.97); }
 .shop .smsg { min-height: 20px; font-size: 14px; color: #ffb08a; }
 .shop .note { font-size: 12px; opacity: 0.8; }
+.shop .note:empty { display: none; }
+.shop button small { font-size: 0.78em; opacity: 0.75; margin-left: 6px; }
+/* Gun cards (user 2026-10-21): stat bars + BUY / checkbox EQUIP. */
+.gcards { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+.gcard {
+  width: 230px; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px 14px;
+  border-radius: 12px; border: 2px solid rgba(212, 175, 55, 0.45);
+  background: linear-gradient(180deg, rgba(58, 36, 14, 0.94), rgba(24, 14, 6, 0.95));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 214, 120, 0.2);
+  color: #ffe9bd; text-shadow: 0 1px 3px #000;
+}
+.gcard.on { border-color: #ffd678; box-shadow: 0 0 0 1px #ffd678, 0 4px 22px rgba(212, 175, 55, 0.45); }
+.ghead { display: flex; align-items: center; gap: 4px; font-size: 18px; letter-spacing: 0.08em; color: #ffd678; }
+.ghead .sicon { width: 48px; height: 28px; }
+.gstat { display: grid; grid-template-columns: 78px 1fr 42px; align-items: center; gap: 8px; font-size: 11px; letter-spacing: 0.06em; }
+.gstat i { height: 8px; border-radius: 4px; background: rgba(0, 0, 0, 0.55); box-shadow: inset 0 0 0 1px rgba(212, 175, 55, 0.3); overflow: hidden; }
+.gstat b { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, #a8761c, #ffd678); }
+.gstat em { font-style: normal; text-align: right; color: #ffd678; font-size: 12px; }
+.g-lifesteal .gstat b { background: linear-gradient(90deg, #7a120c, #e0483c); }
+.gperk { font-size: 12px; line-height: 1.35; min-height: 2.7em; opacity: 0.9; }
+.gcard button { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.gcard .gbuy.poor { opacity: 0.55; }
+.gcard .gequip[aria-checked="true"] { cursor: default; border-color: #ffe9bd; background: linear-gradient(180deg, #7a5210, #4a2c10); }
+.gcard .gequip[aria-checked="true"]:hover { filter: none; }
+.gbox {
+  width: 16px; height: 16px; flex: none; border-radius: 3px; border: 2px solid #d4af37;
+  background: rgba(0, 0, 0, 0.5); color: #ffd678; display: inline-flex;
+}
+.gbox svg { width: 100%; height: 100%; }
+@media (min-height: 900px) and (min-width: 1400px) {
+  .gcards { gap: 18px; }
+  .gcard { width: 280px; gap: 10px; padding: 16px 18px 18px; }
+  .ghead { font-size: 22px; }
+  .ghead .sicon { width: 58px; height: 34px; }
+  .gstat { grid-template-columns: 94px 1fr 50px; font-size: 13px; }
+  .gstat i { height: 10px; }
+  .gstat em { font-size: 14px; }
+  .gperk { font-size: 14px; }
+  .shop button { font-size: 17px; }
+}
 /* Rye sets taller lines than the old system face: at 800x450 the armory
    clipped its title and BACK. Short screens tighten it; `safe` + scroll is
    the last resort, never a cut-off button. */
@@ -313,6 +354,13 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
   .shop button { padding: 7px 12px; font-size: 13px; }
   .shop .sicon { width: 26px; height: 17px; }
   .shop .smsg { min-height: 0; font-size: 12px; }
+  .gcards { gap: 8px; flex-wrap: nowrap; }
+  .gcard { width: min(200px, calc((100vw - 48px) / 3)); gap: 5px; padding: 8px 10px 10px; }
+  .ghead { font-size: 15px; }
+  .ghead .sicon { width: 36px; height: 21px; }
+  .gstat { grid-template-columns: 64px 1fr 36px; gap: 6px; font-size: 10px; }
+  .gstat i { height: 6px; }
+  .gperk { font-size: 11px; }
 }
 /* Shop / revive icons: revolver finishes + first aid kit (inline SVG). */
 .sicon { width: 30px; height: 20px; vertical-align: middle; margin-right: 8px; flex: none; }
@@ -475,7 +523,12 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 .mute-btn { position: absolute; top: calc(10px + env(safe-area-inset-top)); right: calc(14px + env(safe-area-inset-right)); width: 44px; height: 44px; border-radius: 50%; background: rgba(255, 214, 120, 0.15); border: 2px solid rgba(255, 214, 120, 0.7); cursor: pointer; font-size: 22px; display: flex; align-items: center; justify-content: center; color: #ffe9bd; pointer-events: auto; transition: all 0.2s; font-weight: bold; }
 .mute-btn:hover { background: rgba(255, 214, 120, 0.25); border-color: rgba(255, 214, 120, 0.9); }
 .mute-btn:active { transform: scale(0.95); }
-/* Single small-screen breakpoint: HUD stays identical everywhere else. */
+/* 701-960px (800x450 / 907x510 QA sizes): shorter HP bars so the cue
+   between them keeps a readable size (fitCue in home.ts shrinks the rest). */
+@media (max-width: 960px) and (min-width: 701px) {
+  .hp { width: 180px; }
+}
+/* Small-screen breakpoint: HUD stays identical everywhere else. */
 @media (max-width: 700px) {
   .hud .cue { font-size: 22px; }
   .hud .sub { font-size: 12px; top: calc(40px + env(safe-area-inset-top)); }

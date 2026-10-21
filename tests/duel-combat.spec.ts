@@ -110,6 +110,11 @@ test.describe('Gamey - Combat', () => {
 
   test('QTE hits in the gold shrink bloom (gap down, bar up)', async ({ page }) => {
     await startStandard(page);
+    // Pin 8m: the ring is capped at the foe's width (user 2026-10-21), so at
+    // a long roll (21m: cap ~1.1 deg < 2.4 start) the first hits shrink the
+    // bloom under a ring that stays at the cap.
+    await page.evaluate(() => (window as unknown as { __gamey: { round(i: number, d?: number): void } }).__gamey.round(0, 8));
+    await page.waitForSelector('.readyzone', { timeout: 8000 });
     await parkInHolster(page);
     await page.waitForTimeout(300);
     await expect(page.locator('.qte .qtrack')).toBeVisible();
@@ -163,6 +168,10 @@ test.describe('Gamey - Combat', () => {
   test('leaving the holster restarts the whole countdown', async ({ page, isMobile }) => {
     test.skip(isMobile, 'touch has no hover: Focus is committed once started');
     await startStandard(page);
+    // 8m: the restart must show in the ring, which is capped at the foe's
+    // width (an 18m roll held it at the cap before and after).
+    await page.evaluate(() => (window as unknown as { __gamey: { round(i: number, d?: number): void } }).__gamey.round(0, 8));
+    await page.waitForSelector('.readyzone', { timeout: 8000 });
     await parkInHolster(page);
     const z = (await page.locator('.readyzone').boundingBox())!;
     expect(await qteHits(page, 1)).toBe(1);
@@ -344,7 +353,12 @@ test.describe('Gamey - Combat', () => {
     await page.goto('/basic.html');
     await page.waitForLoadState('networkidle');
     await page.waitForSelector('.readyzone', { timeout: 8000 }); // fresh profile = tutorial
+    // 6m + two QTE hits: the kicked ring must stay under the foe-width cap
+    // (2.26 deg at 6m; the unfocused 2.7 deg sits above it at every range).
+    await page.evaluate(() => (window as unknown as { __gamey: { tutorial(f?: string, d?: number): void } }).__gamey.tutorial(undefined, 6));
+    await page.waitForSelector('.readyzone', { timeout: 8000 });
     await parkInHolster(page);
+    await qteHits(page, 2);
     await waitDraw(page);
     // Waits run on the game's fixed clock, not wall time: headless software
     // GL at 1920 draws ~5fps and the 0.1s dt clamp then runs the game at about

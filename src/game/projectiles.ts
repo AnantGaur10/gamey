@@ -73,12 +73,23 @@ export class ProjectileSim {
 }
 
 // --- capsule hit test (sphere-vs-segment, world space) ---
-// Standing capsule: head sphere at y+1.9 r=0.34, body segment y 0.9..1.55
-// r=0.62. Radii match the old screen-space test so TTK/feel is unchanged —
-// only the sampling path is now ballistic. Wounded poses shift the capsule
-// with the visual (wound poses are group-level, so the offsets below mirror
-// the pose targets in home.ts). Prone is a vertical-capsule approximation of
-// a horizontal body — honest stopgap until per-bone attribution lands.
+// Standing capsule: head sphere at y+1.9, body segment y 0.9..1.55 r=0.62
+// (the body radius matches the old screen-space test, so body TTK/feel is
+// unchanged). Wounded poses shift the capsule with the visual (wound poses
+// are group-level, so the offsets below mirror the pose targets in home.ts;
+// the visible head sits within 3cm of headY in none/crouch/prone). Prone is
+// a vertical-capsule approximation of a horizontal body — honest stopgap
+// until per-bone attribution lands.
+//
+// Head priority (2026-10-21): the body capsule's top cap bulges to y 2.17
+// and ~0.5m in front of the face, and bullets are sampled every ~23cm, so a
+// head-bound bullet was usually sampled inside it first: 84% of dead-centre
+// head shots and every chin shot scored as body hits. Upright poses now ask
+// whether the line of fire crosses the head (or hat) within the target once
+// it enters the body: the old screen-space test also checked the head first
+// along the whole line. The upright head sphere is the visible head (0.40 x
+// 0.34m box, r 0.25: collar and shoulder tops stay body); prone keeps the
+// old r 0.34 per-sample rule.
 function distPointSegment2(
   px: number, py: number, pz: number,
   ax: number, ay: number, az: number,
@@ -94,30 +105,107 @@ export interface CapsuleProfile {
   headY: number;
   bodyLoY: number;
   bodyHiY: number;
+  headR: number;
+  /** Hat + head priority along the line of fire (not prone). */
+  upright: boolean;
 }
 
 /** Hitbox per wound pose. `none` = standing capsule above. */
 export const CAPSULE_FOR_POSE: Record<WoundPose, CapsuleProfile> = {
-  none: { headY: 1.9, bodyLoY: 0.9, bodyHiY: 1.55 },
-  bend: { headY: 1.68, bodyLoY: 0.75, bodyHiY: 1.42 },
-  crouch: { headY: 1.32, bodyLoY: 0.5, bodyHiY: 1.12 },
-  prone: { headY: 0.55, bodyLoY: 0.08, bodyHiY: 0.72 },
+  none: { headY: 1.9, bodyLoY: 0.9, bodyHiY: 1.55, headR: 0.25, upright: true },
+  bend: { headY: 1.68, bodyLoY: 0.75, bodyHiY: 1.42, headR: 0.25, upright: true },
+  crouch: { headY: 1.32, bodyLoY: 0.5, bodyHiY: 1.12, headR: 0.25, upright: true },
+  prone: { headY: 0.55, bodyLoY: 0.08, bodyHiY: 0.72, headR: 0.34, upright: false },
 };
+
+/** How far past a body contact the line of fire is searched for the head:
+    from the body's front (<= 0.62m before the axis) to past the widest
+    brim behind it. */
+const HEAD_LOOKAHEAD_M = 1.3;
+const HEAD_LOOKAHEAD_STEP_M = 0.02;
 
 export function capsuleMid(cap: CapsuleProfile): number {
   return (cap.bodyLoY + cap.bodyHiY) / 2;
 }
 
+/** A hat as a solid of revolution on the head axis: radius per `step`-tall
+    band from `y0`, both relative to the head centre (`headY`), so it rides
+    every upright pose. Measured off each rig's hat mesh (cowboyGlb.ts):
+    the 0.34 head sphere stops at +0.34, under every crown (outlaw +0.49,
+    top hat +0.72), and brim edges past ~0.3 fell to the body capsule, so
+    shots through the hat read as misses or body hits (user 2026-10-21). */
+export interface HatProfile {
+  y0: number;
+  step: number;
+  r: number[];
+}
+
+/** Outlaw hat (procedural stand-in, before / without its GLB). */
+export const DEFAULT_HAT: HatProfile = {
+  y0: 0.12, step: 0.04,
+  r: [0.381, 0.381, 0.183, 0.18, 0.176, 0.177, 0.178, 0.18, 0.167, 0.11],
+};
+
+/** Head sphere, or (upright) the hat, which counts as the head. */
+function inHead(
+  px: number, py: number, pz: number,
+  feet: { x: number; y: number; z: number },
+  cap: CapsuleProfile,
+  hat: HatProfile | null | undefined,
+): boolean {
+  const dx = px - feet.x, dy = py - feet.y - cap.headY, dz = pz - feet.z;
+  if (dx * dx + dy * dy + dz * dz <= cap.headR * cap.headR) return true;
+  if (!hat || !cap.upright) return false;
+  const i = Math.floor((dy - hat.y0) / hat.step);
+  const r = i >= 0 && i < hat.r.length ? hat.r[i] : 0;
+  return dx * dx + dz * dz <= r * r;
+}
+
+/** `dir` (the bullet's velocity, any length) turns on head priority along
+    the line of fire for upright poses; without it, per-sample only. */
 export function testCapsuleHit(
   pos: [number, number, number],
   targetFeet: { x: number; y: number; z: number },
   cap: CapsuleProfile = CAPSULE_FOR_POSE.none,
+  hat?: HatProfile | null,
+  dir?: [number, number, number],
 ): { head: boolean; body: boolean; point: [number, number, number] } {
   const [px, py, pz] = pos;
-  const hx = targetFeet.x, hy = targetFeet.y + cap.headY, hz = targetFeet.z;
-  const dh2 = (px - hx) * (px - hx) + (py - hy) * (py - hy) + (pz - hz) * (pz - hz);
-  if (dh2 <= 0.34 * 0.34) return { head: true, body: false, point: [px, py, pz] };
+  if (inHead(px, py, pz, targetFeet, cap, hat)) return { head: true, body: false, point: [px, py, pz] };
   const d2 = distPointSegment2(px, py, pz, targetFeet.x, targetFeet.y + cap.bodyLoY, targetFeet.z, targetFeet.x, targetFeet.y + cap.bodyHiY, targetFeet.z);
-  if (d2 <= 0.62 * 0.62) return { head: false, body: true, point: [px, py, pz] };
-  return { head: false, body: false, point: [px, py, pz] };
+  if (d2 > 0.62 * 0.62) return { head: false, body: false, point: [px, py, pz] };
+  const len = dir ? Math.hypot(dir[0], dir[1], dir[2]) : 0;
+  if (cap.upright && len > 0) {
+    const ux = dir![0] / len, uy = dir![1] / len, uz = dir![2] / len;
+    for (let s = HEAD_LOOKAHEAD_STEP_M; s <= HEAD_LOOKAHEAD_M; s += HEAD_LOOKAHEAD_STEP_M) {
+      const qx = px + ux * s, qy = py + uy * s, qz = pz + uz * s;
+      if (inHead(qx, qy, qz, targetFeet, cap, hat)) return { head: true, body: false, point: [qx, qy, qz] };
+    }
+  }
+  return { head: false, body: true, point: [px, py, pz] };
+}
+
+/** What a bullet fired now would hit if the target holds still: the live
+    sim's integrator, substep and hit test on a scratch bullet. Fire-time
+    lethality (double-KO rule) reads it, so "aimed at the head" means the
+    same head + hat zone the hit test scores. */
+export function predictHit(
+  from: { x: number; y: number; z: number },
+  dir: { x: number; y: number; z: number },
+  distM: number,
+  targetFeet: { x: number; y: number; z: number },
+  cap: CapsuleProfile,
+  hat: HatProfile | null | undefined,
+  substepDt: number,
+): "head" | "body" | null {
+  const sim = new ProjectileSim();
+  const b = sim.fire({ from, dir, distM, shooter: "player", gunId: "default", lethal: false })!;
+  while (b.alive) {
+    sim.step(substepDt);
+    if (!b.alive) break;
+    const r = testCapsuleHit(b.pos, targetFeet, cap, hat, b.vel);
+    if (r.head) return "head";
+    if (r.body) return "body";
+  }
+  return null;
 }

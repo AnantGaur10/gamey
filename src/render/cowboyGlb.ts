@@ -3,6 +3,7 @@ import { makeGunHolster, type Cowboy } from "./cowboy";
 import { addRimLight } from "./arena";
 import { keepOnGpu } from "./gpu";
 import { pivotMesh, type SwayNode } from "./sway";
+import { CAPSULE_FOR_POSE, type HatProfile } from "../game/projectiles";
 
 // Loads a Blender-exported cowboy GLB and adapts it to the Cowboy seam so
 // game logic never knows the difference. Returns null on ANY failure —
@@ -31,6 +32,68 @@ export interface CowboyGlb extends Cowboy {
   update(dt: number): void;
   /** Hat + coat-tail pivots for render/sway.ts (empty on old GLBs). */
   sway: SwayNode[];
+  /** Measured off this rig's meshes at load (standing). */
+  dims: CowboyDims;
+}
+
+export interface CowboyDims {
+  /** Hat hit volume (null: no hat mesh). */
+  hat: HatProfile | null;
+  /** Half the widest lateral extent, hat brim included (crosshair cap). */
+  halfWidth: number;
+}
+
+const HAT_STEP = 0.04;
+
+/** Hat profile + silhouette half-width in the cowboy group's frame. The hat
+    is sampled along its triangle EDGES every 2cm: a low-poly crown has
+    vertices only at its rim and top, so vertex radii left holes up the
+    wall. Radii are around the hat's own axis (it sits ~0.35m along the
+    facing from the feet, which a bullet flying down the duel axis never
+    sees). */
+function measureDims(group: THREE.Object3D, hatMesh: THREE.Object3D | undefined): CowboyDims {
+  group.updateMatrixWorld(true);
+  const toGroup = group.matrixWorld.clone().invert();
+  const v = new THREE.Vector3();
+  let minX = Infinity, maxX = -Infinity;
+  group.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const pos = m.geometry.getAttribute("position");
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld).applyMatrix4(toGroup);
+      minX = Math.min(minX, v.x);
+      maxX = Math.max(maxX, v.x);
+    }
+  });
+  const halfWidth = maxX > minX ? (maxX - minX) / 2 : 0;
+  const hm = hatMesh as THREE.Mesh | undefined;
+  if (!hm?.isMesh) return { hat: null, halfWidth };
+  const pos = hm.geometry.getAttribute("position");
+  const pts: THREE.Vector3[] = [];
+  for (let i = 0; i < pos.count; i++) pts.push(new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(hm.matrixWorld).applyMatrix4(toGroup));
+  const box = new THREE.Box3().setFromPoints(pts);
+  if (box.isEmpty()) return { hat: null, halfWidth };
+  const cx = (box.min.x + box.max.x) / 2, cz = (box.min.z + box.max.z) / 2;
+  const n = Math.max(1, Math.ceil((box.max.y - box.min.y) / HAT_STEP));
+  const r = new Array<number>(n).fill(0);
+  const idx = hm.geometry.getIndex();
+  const tri = (k: number) => (idx ? idx.getX(k) : k);
+  const triCount = idx ? idx.count : pos.count;
+  const a = new THREE.Vector3();
+  for (let t = 0; t + 2 < triCount; t += 3) {
+    for (const [i, j] of [[0, 1], [1, 2], [2, 0]]) {
+      const p = pts[tri(t + i)], q = pts[tri(t + j)];
+      const k = Math.max(1, Math.ceil(p.distanceTo(q) / 0.02));
+      for (let s = 0; s <= k; s++) {
+        a.lerpVectors(p, q, s / k);
+        const b = Math.min(n - 1, Math.floor((a.y - box.min.y) / HAT_STEP));
+        r[b] = Math.max(r[b], Math.hypot(a.x - cx, a.z - cz));
+      }
+    }
+  }
+  const round = (x: number) => Math.round(x * 1000) / 1000;
+  return { hat: { y0: round(box.min.y - CAPSULE_FOR_POSE.none.headY), step: HAT_STEP, r: r.map(round) }, halfWidth };
 }
 
 let sharedMat: THREE.MeshLambertMaterial | null = null;
@@ -165,6 +228,7 @@ export async function loadCowboyGlb(
       const pivot = pivotMesh(m, at, `${prefix}_${n}Pivot`);
       if (pivot) sway.push({ pivot, kind });
     }
+    const dims = measureDims(group, inner.getObjectByName(`${prefix}_Hat`));
     const armR = inner.getObjectByName(`${prefix}_armR`) as THREE.Group | undefined;
     const elbowR = inner.getObjectByName(`${prefix}_elbowR`) as THREE.Group | undefined;
     const gunTip = inner.getObjectByName(`${prefix}_gunTip`);
@@ -292,7 +356,7 @@ export async function loadCowboyGlb(
     // hand onto the holstered grip, so holster() only moves the gun.
     const gun = byName("Gun");
     const holsterCtl = makeGunHolster(gun, byName("GunHolster"), elbowR);
-    return { group, armR, elbowR, gunTip, parts, joints, setGunsDown, setRaised, setFall, mixer, hasClip, playClip, stopClips, playFrozen, update, sway,
+    return { group, armR, elbowR, gunTip, parts, joints, setGunsDown, setRaised, setFall, mixer, hasClip, playClip, stopClips, playFrozen, update, sway, dims,
       gun, holster: holsterCtl.holster, drawStep: holsterCtl.drawStep, gunState: holsterCtl.gunState };
   } catch (err) {
     // Silent in prod (procedural fallback covers AdBlock/offline/file://);
