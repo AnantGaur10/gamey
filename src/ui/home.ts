@@ -760,7 +760,10 @@ function runDuel(
     d.normalize();
     _fR.crossVectors(d, THREE.Object3D.DEFAULT_UP).normalize();
     _fU.crossVectors(_fR, d).normalize();
-    const sp = foeAim.sampleSpread();
+    // Same cap as the player's ring (spreadCapDeg): the foe's bloom never
+    // spreads wider than the player at this range (user 2026-10-21). The
+    // ladder's hand wobble stays uncapped: it is the per-level difficulty.
+    const sp = foeAim.sampleSpread((Math.atan(dimsOf(player).halfWidth / dist) * 180) / Math.PI);
     return target.clone()
       .addScaledVector(_fR, (Math.tan(sp.dx) + gauss() * wobble) * dist)
       .addScaledVector(_fU, (Math.tan(sp.dy) + gauss() * wobble * 0.85) * dist)
