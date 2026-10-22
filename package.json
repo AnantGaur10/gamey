@@ -24,6 +24,7 @@
     "build:saloon": "blender -b --factory-startup --python scripts/blender/build_saloon.py",
     "build:falls": "blender -b --factory-startup --python scripts/blender/build_falls.py",
     "build:town": "blender -b --factory-startup --python scripts/blender/build_town.py",
+    "build:covers": "blender -b --factory-startup --python scripts/blender/build_covers.py && node scripts/covers.mjs",
     "ai:wounds": "DRAW=1 VIEWPORT=1920x1080 npx tsx tests/ai-wounds.ts",
     "ai:wounds:mobile": "DRAW=1 VIEWPORT=800x450 npx tsx tests/ai-wounds.ts",
     "test:physics": "tsx tests/physics-refresh.test.ts",

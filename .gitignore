@@ -6,3 +6,4 @@ playwright-report/
 *.blend1
 .DS_Store
 __pycache__/
+store/covers/plates/
