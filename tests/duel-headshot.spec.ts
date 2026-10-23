@@ -24,6 +24,7 @@ async function boot(page: Page): Promise<void> {
   if (await page.locator('.skip').isVisible().catch(() => false)) {
     await page.click('.skip button');
     await page.waitForTimeout(400);
+    if (await page.locator('.nameprompt').isVisible().catch(() => false)) await page.click('.nameprompt [data-n=skip]'); // guest name screen after the tutorial
   }
 }
 

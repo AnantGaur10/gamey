@@ -12,6 +12,8 @@ export interface AudioManager {
   startWind(strength: number, hell?: boolean): void;
   stopWind(): void;
   playSFX(sfx: 'hit-body' | 'hit-head', volume?: number): Promise<void>;
+  /** SETTINGS SFX level 0..1 (gunshots, wind, hit sounds). */
+  setSfxVolume(v: number): void;
   muteForAd(): void;
   unmuteAfterAd(): void;
   toggleMute(): boolean;
@@ -30,7 +32,7 @@ export function createAudioManager(): AudioManager {
   let muted = false;
   let currentMusic: HTMLAudioElement | null = null;
   let musicVolume = 0.5;
-  let sfxVolume = 0.8;
+  let sfxVolume = 1; // SETTINGS SFX level (synth bus gain + hit sounds)
   let wasPlayingBeforeAd = false;
 
   function getAudioContext(): AudioContext | null {
@@ -143,7 +145,7 @@ export function createAudioManager(): AudioManager {
   function bus(ctx: AudioContext): GainNode {
     if (!sfxBus) {
       sfxBus = ctx.createGain();
-      sfxBus.gain.value = muted ? 0 : 1;
+      sfxBus.gain.value = muted ? 0 : sfxVolume;
       sfxBus.connect(ctx.destination);
     }
     return sfxBus;
@@ -351,7 +353,7 @@ export function createAudioManager(): AudioManager {
       const url = resolveMusicUrl(filename);
       if (!url) return;
       const audio = new Audio(url);
-      audio.volume = volume;
+      audio.volume = Math.min(1, volume * sfxVolume);
 
       audio.play().catch((err) => {
         log(`Failed to play SFX: ${sfx}`, err);
@@ -362,7 +364,12 @@ export function createAudioManager(): AudioManager {
   }
 
   function setBus(on: boolean): void {
-    if (sfxBus && audioContext) sfxBus.gain.setTargetAtTime(on ? 1 : 0, audioContext.currentTime, 0.02);
+    if (sfxBus && audioContext) sfxBus.gain.setTargetAtTime(on ? sfxVolume : 0, audioContext.currentTime, 0.02);
+  }
+
+  function setSfxVolume(v: number): void {
+    sfxVolume = Math.max(0, Math.min(1, v));
+    if (!muted) setBus(true);
   }
 
   function muteForAd(): void {
@@ -412,6 +419,7 @@ export function createAudioManager(): AudioManager {
     startWind,
     stopWind,
     playSFX,
+    setSfxVolume,
     muteForAd,
     unmuteAfterAd,
     toggleMute,

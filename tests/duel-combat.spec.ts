@@ -39,6 +39,7 @@ async function startStandard(page: Page): Promise<void> {
   if (await page.locator('.skip').isVisible().catch(() => false)) {
     await page.click('.skip button'); // fresh profile boots tutorial-first
     await page.waitForTimeout(400);
+    if (await page.locator('.nameprompt').isVisible().catch(() => false)) await page.click('.nameprompt [data-n=skip]'); // guest name screen after the tutorial
   }
   await page.click('button[data-m="standard"]');
   await page.waitForSelector('.readyzone', { timeout: 8000 });
@@ -242,6 +243,7 @@ test.describe('Gamey - Combat', () => {
     if (await page.locator('.skip').isVisible().catch(() => false)) {
       await page.click('.skip button');
       await page.waitForTimeout(400);
+      if (await page.locator('.nameprompt').isVisible().catch(() => false)) await page.click('.nameprompt [data-n=skip]'); // guest name screen after the tutorial
     }
     await page.click('button[data-m="shop"]');
     await expect(page.locator('.shop h2')).toContainText('ARMORY');

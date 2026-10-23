@@ -7,13 +7,18 @@ export interface Progress {
   reviveToken: 0 | 1;
   bestStreak: number;
   bestBestOf: number;
-  /** map: home-screen MAP choice ("random" or a map id, render/maps.ts). */
-  settings: { mute: boolean; quality: "low" | "high"; map?: string };
+  /** map: home-screen MAP choice ("random" or a map id, render/maps.ts).
+      quality: SETTINGS graphics ("low" = 1x, no post pass). sfx / music:
+      SETTINGS volumes 0..1 (missing = 1). */
+  settings: { mute: boolean; quality: "low" | "high"; map?: string; sfx?: number; music?: number };
   /** First-launch tutorial finished or skipped: never forced again. */
   tutorialDone?: boolean;
   /** Standard-mode ladder (game/levels.ts): the next unbeaten level,
       0-based; LEVEL_COUNT = all ten cleared. Missing on older saves = 0. */
   level?: number;
+  /** Guest display name (asked after the tutorial, else random; SETTINGS
+      renames it). A CrazyGames account name always wins over it. */
+  playerName?: string;
 }
 
 export function defaultProgress(): Progress {
@@ -55,6 +60,13 @@ export interface PortalAdapter {
   loadProgress(): Progress;
   saveProgress(p: Progress): void;
   getUser(): { id: string | null; name: string | null };
+  /** CrazyGames Auth Listener: the account name after a login / logout
+      mid-session (null = guest). */
+  onUserChange(cb: (name: string | null) => void): void;
+  /** A guest on a portal with accounts: SETTINGS may offer the portal's own
+      login prompt (optional, never the main CTA). */
+  readonly canLogin: boolean;
+  requestLogin(): void;
   /** CrazyGames SDK `user.systemInfo` (technical spec: use it for device-
       specific experience, not our own UA sniffing). Null without the SDK. */
   deviceInfo(): DeviceInfo | null;

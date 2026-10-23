@@ -21,6 +21,8 @@ interface CgSdk {
   user: {
     isUserAccountAvailable: boolean;
     getUser(): Promise<CgUser | null>;
+    addAuthListener(cb: (u: CgUser | null) => void): void;
+    showAuthPrompt(): Promise<CgUser | null>;
     systemInfo?: { device?: { type?: string }; os?: { name?: string } };
   };
 }
@@ -57,6 +59,8 @@ export function createCrazyGamesAdapter(): PortalAdapter {
   let sdk: CgSdk | null = null;
   let ads = ADS_ENABLED;
   let user: { id: string | null; name: string | null } = { id: null, name: null };
+  let accounts = false;
+  const userListeners: Array<(name: string | null) => void> = [];
   /** Run an SDK call; on any throw fall back to no-SDK mode for the session. */
   const safe = <T>(fn: (s: CgSdk) => T, fallback: () => T): T => {
     if (!sdk) return fallback();
@@ -105,8 +109,22 @@ export function createCrazyGamesAdapter(): PortalAdapter {
         }
         s.data.setItem(MIGRATED, "1");
         if (s.user.isUserAccountAvailable) {
+          accounts = true;
           const u = await s.user.getUser().catch(() => null);
           if (u) user = { id: null, name: u.username };
+          // Auth Listener (account spec): a guest logging in mid-session gets
+          // their account name at once. The save needs nothing here: with the
+          // Data module the SDK reloads the game onto the account's data.
+          try {
+            s.user.addAuthListener((nu) => {
+              user = { id: null, name: nu?.username ?? null };
+              for (const cb of userListeners) {
+                try { cb(user.name); } catch (err) { if (import.meta.env.DEV) console.warn("[gamey] user listener", err); }
+              }
+            });
+          } catch (err) {
+            if (import.meta.env.DEV) console.warn("[gamey] addAuthListener failed", err);
+          }
         }
       } catch (err) {
         if (import.meta.env.DEV) console.warn("[gamey] CrazyGames SDK unavailable, no-SDK mode", err);
@@ -127,6 +145,14 @@ export function createCrazyGamesAdapter(): PortalAdapter {
     },
     getUser() {
       return user;
+    },
+    onUserChange(cb: (name: string | null) => void) {
+      userListeners.push(cb);
+    },
+    get canLogin() { return !!sdk && accounts && !user.name; },
+    requestLogin() {
+      // The answer arrives through the auth listener; a closed prompt is fine.
+      safe((s) => { void s.user.showAuthPrompt().catch(() => null); }, () => undefined);
     },
     deviceInfo(): DeviceInfo | null {
       return safe((s) => {

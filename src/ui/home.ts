@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { createArena, stagePositions, faceToward, cssSkyForRound, createShadowDecal, type ShadowDecal } from "../render/arena";
+import { createArena, stagePositions, faceToward, cssSkyForRound, createShadowDecal, setLowGraphics, type ShadowDecal } from "../render/arena";
 import { createSway, type Sway } from "../render/sway";
 import { createCowboy, paintGun, type Cowboy } from "../render/cowboy";
 import { loadCowboyGlb, preloadCowboyGlb, swapCowboy, type CowboyGlb, type CowboyDims } from "../render/cowboyGlb";
@@ -28,6 +28,7 @@ import { storagePersisted } from "../store/SafeStore";
 import { needsTutorial, markTutorialSeen } from "../portal/firstLaunch";
 import { createAudioManager, type AudioManager } from "../audio/AudioManager";
 import { initDeviceTier, deviceTier } from "../render/device";
+import { randomCowboyName, cleanName, escapeHtml, displayName, NAME_MAX } from "./names";
 
 export type Mode = "standard" | "deathmatch" | "tutorial";
 
@@ -80,6 +81,25 @@ export function boot(root: HTMLElement, adapter: PortalAdapter): void {
   if (progress.settings.mute) {
     audio.toggleMute();
   }
+  // SETTINGS (user 2026-10-23): volumes + low graphics, before the first canvas.
+  audio.setSfxVolume(progress.settings.sfx ?? 1);
+  audio.setMusicVolume(MUSIC_BASE * (progress.settings.music ?? 1));
+  setLowGraphics(progress.settings.quality === "low");
+
+  // Auth Listener: a login / logout mid-session renames the player at once
+  // (home re-renders; elsewhere every [data-pname] label is updated).
+  adapter.onUserChange((account) => {
+    // Logged out of an account that never had a guest name: give it one.
+    if (!account && !adapter.loadProgress().playerName) {
+      const p = adapter.loadProgress();
+      p.playerName = randomCowboyName();
+      adapter.saveProgress(p);
+    }
+    if (root.querySelector(".menu.home")) { showHome(root, adapter, audio); return; }
+    const name = displayName(adapter);
+    root.querySelectorAll<HTMLElement>("[data-pname]").forEach((e) => { e.textContent = name; });
+    root.querySelector(".settings")?.dispatchEvent(new Event("userchange"));
+  });
 
   adapter.loadingStop();
 
@@ -90,8 +110,67 @@ export function boot(root: HTMLElement, adapter: PortalAdapter): void {
   if (needsTutorial(adapter, progress)) {
     runDuel(root, adapter, "tutorial", audio);
   } else {
+    // Players from before names (user 2026-10-23): a random one, renamed in
+    // SETTINGS. A CrazyGames account name needs none.
+    if (!adapter.getUser().name && !progress.playerName) {
+      const p = adapter.loadProgress();
+      p.playerName = randomCowboyName();
+      adapter.saveProgress(p);
+    }
     showHome(root, adapter, audio);
   }
+}
+
+/** Music level at 100% in SETTINGS (AudioManager's own default). */
+const MUSIC_BASE = 0.5;
+
+/** After the tutorial (finished or skipped): a guest without a name gets
+    the name screen once; a CrazyGames account name is never asked for. */
+function afterTutorial(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager): void {
+  if (adapter.getUser().name || adapter.loadProgress().playerName) showHome(root, adapter, audio);
+  else showNamePrompt(root, adapter, audio);
+}
+
+/** Name screen (user 2026-10-23: "ask a name that is skippable"): prefilled
+    with a random cowboy name, die = another one, OK / Enter keeps what is
+    typed, SKIP keeps the random one. */
+function showNamePrompt(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager): void {
+  root.innerHTML = "";
+  document.body.classList.remove("in-duel");
+  document.body.style.background = "";
+  const prog = adapter.loadProgress();
+  showMenuScene(isMapChoice(prog.settings.map) ? prog.settings.map : "random", prog.equippedGun, { calm: true });
+  let suggested = randomCowboyName();
+  const page = el(`<div class="nameprompt">
+    <h2>WHAT DO THEY CALL YOU, PARTNER?</h2>
+    <div class="namefield">
+      <input type="text" maxlength="${NAME_MAX}" autocomplete="off" spellcheck="false" aria-label="Your name" value="${escapeHtml(suggested)}">
+      <button class="namedie" data-n="roll" title="Another name">${DICE_ICON}</button>
+    </div>
+    <div class="namebtns">
+      <button class="namebtn primary" data-n="ok">OK</button>
+      <button class="namebtn" data-n="skip">SKIP</button>
+    </div>
+  </div>`);
+  root.appendChild(page);
+  const input = page.querySelector<HTMLInputElement>("input")!;
+  const done = (name: string): void => {
+    const p = adapter.loadProgress();
+    p.playerName = name;
+    adapter.saveProgress(p);
+    showHome(root, adapter, audio);
+  };
+  page.querySelector("[data-n=roll]")!.addEventListener("click", () => {
+    suggested = randomCowboyName();
+    input.value = suggested;
+  });
+  page.querySelector("[data-n=ok]")!.addEventListener("click", () => done(cleanName(input.value) ?? suggested));
+  page.querySelector("[data-n=skip]")!.addEventListener("click", () => done(suggested));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); done(cleanName(input.value) ?? suggested); }
+  });
+  // Desktop only: a phone would open its keyboard over the screen.
+  if (!isCoarsePointer()) { input.focus({ preventScroll: true }); input.select(); }
 }
 
 // Home (user 2026-10-14: "modern but keep the cowboy aspects", options
@@ -131,9 +210,11 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
       <button class="opt" data-m="deathmatch"><span class="lbl">DEATHMATCH</span><small>Duel after duel · one life</small></button>
       <button class="opt" data-m="map"><span class="lbl">MAP</span><small>${mapThumb}${mapLabel(mapChoice)}</small></button>
       <button class="opt" data-m="shop"><span class="lbl">ARMORY</span><small>Revolvers · revive token</small></button>
+      <button class="opt" data-m="settings"><span class="lbl">SETTINGS</span><small>Name · sound · graphics</small></button>
       <button class="opt" data-m="tutorial"><span class="lbl">HOW TO PLAY</span><small>Tutorial</small></button>
     </nav>
     <div class="topbar">
+      <button class="chip pname" title="Change name in Settings">${HAT_ICON}<b data-pname>${escapeHtml(displayName(adapter, progress))}</b></button>
       <span class="chip gold" title="Gold">${COIN_ICON}<b>${progress.gold}</b></span>
       <button class="mute-btn" title="Sound on / off"></button>
     </div>
@@ -147,6 +228,7 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
     muteBtn.classList.toggle("off", audio.isMuted());
   };
   paintMute();
+  menu.querySelector(".chip.pname")!.addEventListener("click", () => showSettings(root, adapter, audio));
   muteBtn.addEventListener("click", () => {
     const p = adapter.loadProgress();
     p.settings.mute = audio.toggleMute();
@@ -157,8 +239,9 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
   const opts = Array.from(menu.querySelectorAll<HTMLButtonElement>(".opt"));
   opts.forEach((b) => {
     b.addEventListener("click", () => {
-      const m = b.dataset.m as Mode | "shop" | "map";
+      const m = b.dataset.m as Mode | "shop" | "map" | "settings";
       if (m === "map") showMapPicker(root, adapter, audio, mapChoice);
+      else if (m === "settings") showSettings(root, adapter, audio);
       else if (m === "shop") showShop(root, adapter, audio);
       else if (m === "standard") runSeries(root, adapter, m, audio);
       else if (m === "deathmatch") runDeathmatch(root, adapter, audio);
@@ -176,6 +259,100 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
   };
   window.addEventListener("keydown", onKey);
 }
+
+/** Settings (user 2026-10-23: "dim down sfx, music, change names, go to a
+    lower graphics mode"). Every change saves at once; BACK returns home. A
+    CrazyGames account name is shown read-only (account spec). */
+function showSettings(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager): void {
+  root.innerHTML = "";
+  const prog = adapter.loadProgress();
+  const choice: MapChoice = isMapChoice(prog.settings.map) ? prog.settings.map : "random";
+  showMenuScene(choice, prog.equippedGun);
+  const pct = (v: number | undefined) => Math.round((v ?? 1) * 100);
+  const page = el(`<div class="settings">
+    <h2>SETTINGS</h2>
+    <div class="setpanel">
+      <div class="setrow"><span class="setlbl">NAME</span><div class="setname"></div></div>
+      <label class="setrow"><span class="setlbl">SOUND FX</span><input type="range" min="0" max="100" step="5" data-s="sfx" value="${pct(prog.settings.sfx)}"><em>${pct(prog.settings.sfx)}%</em></label>
+      <label class="setrow"><span class="setlbl">MUSIC</span><input type="range" min="0" max="100" step="5" data-s="music" value="${pct(prog.settings.music)}"><em>${pct(prog.settings.music)}%</em></label>
+      <div class="setrow"><span class="setlbl">GRAPHICS</span><div class="setseg">
+        <button data-q="high" aria-pressed="${prog.settings.quality !== "low"}">HIGH</button>
+        <button data-q="low" aria-pressed="${prog.settings.quality === "low"}">LOW</button>
+      </div></div>
+    </div>
+    <button class="mapback" data-b="back">BACK</button>
+  </div>`);
+  root.appendChild(page);
+
+  const nameBox = page.querySelector<HTMLElement>(".setname")!;
+  const paintName = (): void => {
+    const account = adapter.getUser().name;
+    if (account) {
+      nameBox.innerHTML = `<b data-pname>${escapeHtml(account)}</b><small>from your CrazyGames account</small>`;
+      return;
+    }
+    const cur = adapter.loadProgress().playerName ?? "";
+    nameBox.innerHTML = `<div class="namefield">
+        <input type="text" maxlength="${NAME_MAX}" autocomplete="off" spellcheck="false" aria-label="Your name" value="${escapeHtml(cur)}">
+        <button class="namedie" data-n="roll" title="Random name">${DICE_ICON}</button>
+        <button class="namebtn" data-n="save">SAVE</button>
+      </div>${adapter.canLogin ? `<button class="setlogin" data-n="login">Log in with CrazyGames</button>` : ""}`;
+    const input = nameBox.querySelector<HTMLInputElement>("input")!;
+    const saveBtn = nameBox.querySelector<HTMLButtonElement>("[data-n=save]")!;
+    const save = (): void => {
+      const name = cleanName(input.value);
+      if (!name) { input.value = adapter.loadProgress().playerName ?? ""; return; }
+      const p = adapter.loadProgress();
+      p.playerName = name;
+      adapter.saveProgress(p);
+      input.value = name;
+      saveBtn.textContent = "SAVED";
+      input.blur();
+    };
+    input.addEventListener("input", () => { saveBtn.textContent = "SAVE"; });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); save(); } });
+    saveBtn.addEventListener("click", save);
+    nameBox.querySelector("[data-n=roll]")!.addEventListener("click", () => { input.value = randomCowboyName(); save(); });
+    nameBox.querySelector("[data-n=login]")?.addEventListener("click", () => adapter.requestLogin());
+  };
+  paintName();
+  page.addEventListener("userchange", paintName);
+
+  page.querySelectorAll<HTMLInputElement>("input[type=range]").forEach((r) => {
+    const key = r.dataset.s as "sfx" | "music";
+    const out = r.parentElement!.querySelector("em")!;
+    r.addEventListener("input", () => {
+      const v = Number(r.value) / 100;
+      out.textContent = `${r.value}%`;
+      if (key === "sfx") audio.setSfxVolume(v);
+      else audio.setMusicVolume(MUSIC_BASE * v);
+    });
+    r.addEventListener("change", () => {
+      const p = adapter.loadProgress();
+      p.settings[key] = Number(r.value) / 100;
+      adapter.saveProgress(p);
+      if (key === "sfx") { audio.resumeAudioContext(); audio.playGunshotSynth(0.5); } // a sample at the new level
+    });
+  });
+
+  const seg = Array.from(page.querySelectorAll<HTMLButtonElement>("[data-q]"));
+  seg.forEach((b) => b.addEventListener("click", () => {
+    const q = b.dataset.q as "low" | "high";
+    const p = adapter.loadProgress();
+    if (p.settings.quality === q) return;
+    p.settings.quality = q;
+    adapter.saveProgress(p);
+    seg.forEach((o) => o.setAttribute("aria-pressed", String(o === b)));
+    setLowGraphics(q === "low");
+    // Rebuild the backdrop so the new mode shows now (duels pick it up anyway).
+    const live = menuMapId();
+    hideMenuScene();
+    showMenuScene(live ?? choice, p.equippedGun);
+  }));
+  page.querySelector("[data-b=back]")!.addEventListener("click", () => showHome(root, adapter, audio));
+}
+
+const HAT_ICON = `<svg viewBox="0 0 32 24" aria-hidden="true"><path d="M9 14c0-6 2-11 7-11s7 5 7 11z" fill="#8a5a2b" stroke="#2b1a10" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 12.5h14" stroke="#d4af37" stroke-width="2"/><path d="M2 15c4 3 24 3 28 0-1 4-6 6-14 6S3 19 2 15z" fill="#a8723a" stroke="#2b1a10" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
 
 /** Random map card: a die on grey (user 2026-10-14). */
 const DICE_ICON = `<svg class="mapdice" viewBox="0 0 100 100" aria-hidden="true"><path d="M50 8 88 28v44L50 92 12 72V28z" fill="#f4f1ea" stroke="#2a2a2a" stroke-width="4" stroke-linejoin="round"/><path d="M12 28 50 48 88 28M50 48v44" fill="none" stroke="#2a2a2a" stroke-width="4" stroke-linejoin="round"/><path d="M50 48 88 28v44L50 92z" fill="#d9d4c8"/><path d="M12 28 50 48v44L12 72z" fill="#e8e3d8"/><path d="M12 28 50 48 88 28M50 48v44M50 8 88 28v44L50 92 12 72V28z" fill="none" stroke="#2a2a2a" stroke-width="4" stroke-linejoin="round"/><g fill="#b3201c"><ellipse cx="50" cy="28" rx="6" ry="3.6"/><ellipse cx="34" cy="20.5" rx="4.6" ry="2.8"/><ellipse cx="66" cy="35.5" rx="4.6" ry="2.8"/></g><g fill="#2a2a2a"><circle cx="24" cy="48" r="4.2"/><circle cx="38" cy="72" r="4.2"/><circle cx="62" cy="58" r="4.2"/><circle cx="76" cy="44" r="4.2"/><circle cx="62" cy="80" r="4.2"/><circle cx="76" cy="66" r="4.2"/></g></svg>`;
@@ -741,7 +918,7 @@ function runDuel(
     skip.querySelector("button")!.addEventListener("click", () => {
       markTutorialDone();
       cleanup();
-      showHome(root, adapter, audio);
+      afterTutorial(root, adapter, audio);
     });
     coach = mountCoach(root, coarse);
     coach.step(opts.retry ? "retry" : "holster");
@@ -1943,7 +2120,7 @@ function runDuel(
       if (coach && result === "p") {
         // Tutorial won: the rule cards over the finished round, then home
         // (the scene keeps rendering behind them until PLAY / SKIP).
-        coach.rules(() => { cleanup(); showHome(root, adapter, audio); });
+        coach.rules(() => { cleanup(); afterTutorial(root, adapter, audio); });
         return;
       }
       cleanup();
@@ -2041,7 +2218,7 @@ function runDuel(
           ? `${titleCase(ladder.name)} still stands. ${pick(["Draw again.", "Dust off your hat.", "Not today, partner."])}`
           : pick(["The dust settles. Not in your favour.", "Too slow on the draw, partner.", "Dust off your hat and draw again."]),
       score: `<div class="rs-score">
-          <div class="rs-side you"><span>YOU</span><b>${series?.pWins ?? 0}</b></div>
+          <div class="rs-side you"><span data-pname>${escapeHtml(displayName(adapter))}</span><b>${series?.pWins ?? 0}</b></div>
           <div class="rs-dash">—</div>
           <div class="rs-side foe"><span>${ladder ? ladder.name : "FOE"}</span><b>${series?.fWins ?? 0}</b></div>
         </div>${pips ? `<div class="rs-pips">${pips}</div>` : ""}${badge}`,

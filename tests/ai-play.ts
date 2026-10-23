@@ -301,6 +301,7 @@ function parseViewport(): { width: number; height: number; label: string } {
       console.log('\n📚 Tutorial mode detected (first launch) - skipping to home');
       await page.click('.skip button');
       await page.waitForTimeout(500);
+      if (await page.locator('.nameprompt').isVisible().catch(() => false)) await page.click('.nameprompt [data-n=skip]'); // guest name screen after the tutorial
       await ai.observe('skipped-tutorial');
     }
 

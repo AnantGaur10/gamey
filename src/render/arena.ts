@@ -128,6 +128,12 @@ let pixelRatioCap = 2;
 // grade) for the session. FXAA alone cost ~80ms per 1080p frame on software
 // GL; on real GPUs it is well under 1ms and stays on.
 let postOff = false;
+// SETTINGS low graphics (user 2026-10-23): what the watchdog falls back to
+// on a slow device (1x, direct render), chosen by the player instead.
+let lowGfx = false;
+export function setLowGraphics(on: boolean): void {
+  lowGfx = on;
+}
 
 // Right-shoulder perspective camera (see createArena). Offsets in metres
 // from the player's feet: back along the duel line, out to the side, up.
@@ -481,7 +487,7 @@ export function createArena(distM: number): {
   const renderer = acquireRenderer();
   renderer.toneMapping = THREE.NoToneMapping; // the post pass tone maps (goDirect below otherwise)
   renderer.setRenderTarget(null);
-  let post = postOff ? null : createPost(renderer);
+  let post = postOff || lowGfx ? null : createPost(renderer);
   // Direct path (post failed or the watchdog dropped it): built-in materials
   // tone map themselves; no FXAA, no tint/saturation grade.
   const goDirect = () => { renderer.toneMapping = THREE.ACESFilmicToneMapping; };
@@ -886,7 +892,7 @@ export function createArena(distM: number): {
     // store's pixel ratio never changes gameplay.
     // Ceiling by device tier (render/device.ts: 1x on iOS / <= 4GB, 1.5x
     // other touch, 2x desktop); the watchdog only ever lowers it further.
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, deviceTier().maxPixelRatio, pixelRatioCap));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, deviceTier().maxPixelRatio, lowGfx ? 1 : pixelRatioCap));
     renderer.setSize(w, h, false);
     const db = renderer.getDrawingBufferSize(new THREE.Vector2());
     post?.setSize(db.x, db.y);

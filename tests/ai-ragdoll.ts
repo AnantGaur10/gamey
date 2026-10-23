@@ -100,7 +100,7 @@ async function killFoe(page: Page, part: 'mid' | 'head', tag: string, pre?: stri
 
 async function playerDies(page: Page, tag: string) {
   await page.goto('http://localhost:5174/basic.html', { waitUntil: 'networkidle' });
-  if (await page.locator('.skip').isVisible().catch(() => false)) { await page.click('.skip button'); await page.waitForTimeout(400); }
+  if (await page.locator('.skip').isVisible().catch(() => false)) { await page.click('.skip button'); await page.waitForTimeout(400); if (await page.locator('.nameprompt').isVisible().catch(() => false)) await page.click('.nameprompt [data-n=skip]'); }
   await page.click('button[data-m="standard"]');
   await toDraw(page);
   // Idle: never shoot; the foe kills us.

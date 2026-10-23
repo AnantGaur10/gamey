@@ -12,6 +12,8 @@ await page.waitForTimeout(1500);
 // Fresh profile -> tutorial duel with SKIP button; skip to home, then standard.
 const skip = page.locator('.skip button');
 if (await skip.count()) { await skip.click(); await page.waitForTimeout(500); }
+const nameSkip = page.locator('.nameprompt [data-n=skip]'); // guest name screen after the tutorial
+if (await nameSkip.count()) { await nameSkip.click(); await page.waitForTimeout(300); }
 await page.click('button[data-m="standard"]');
 await page.waitForTimeout(800);
 const zone = await page.locator('.readyzone').boundingBox();

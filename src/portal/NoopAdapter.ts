@@ -43,6 +43,9 @@ export function createNoopAdapter(): PortalAdapter {
     getUser() {
       return { id: null, name: null };
     },
+    onUserChange() {},
+    canLogin: false,
+    requestLogin() {},
     deviceInfo() {
       return null;
     },

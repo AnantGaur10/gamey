@@ -589,6 +589,7 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 .menu.home .opt:nth-child(3) { animation-delay: 0.24s; }
 .menu.home .opt:nth-child(4) { animation-delay: 0.3s; }
 .menu.home .opt:nth-child(5) { animation-delay: 0.36s; }
+.menu.home .opt:nth-child(6) { animation-delay: 0.42s; }
 .menu.home .opt::before {
   content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 4px; border-radius: 2px;
   background: linear-gradient(#fff0c0, #d4af37); box-shadow: 0 0 12px rgba(255, 214, 120, 0.7);
@@ -709,6 +710,85 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
   background: linear-gradient(180deg, #4a3010, #241407); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
 }
 .mappick .mapback:hover { filter: brightness(1.18); }
+.settings .mapback:hover { filter: brightness(1.18); }
+/* Name chip (home topbar, user 2026-10-23): opens SETTINGS. */
+.menu.home .chip.pname {
+  min-width: 0; max-width: 260px; cursor: pointer; font-size: 15px; font-weight: 400; letter-spacing: 0.04em;
+  color: #ffe9bd; box-shadow: none; transition: background 0.15s;
+}
+.menu.home .chip.pname b { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu.home .chip.pname:hover { background: rgba(60, 36, 12, 0.8); filter: none; box-shadow: none; }
+@media (max-height: 620px) { .menu.home .chip.pname { font-size: 13px; max-width: 190px; } }
+/* Name screen after the tutorial + SETTINGS: map picker's veil and title. */
+.nameprompt, .settings {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 16px; padding: 12px; pointer-events: auto; cursor: default; background: rgba(14, 7, 3, 0.62);
+}
+.nameprompt h2, .settings h2 {
+  margin: 0; letter-spacing: 0.1em; text-align: center; font-family: "Rye", Georgia, "Times New Roman", serif;
+  font-size: 30px; color: #ffd678; text-shadow: 0 2px 0 #4a2c10, 0 5px 16px rgba(0, 0, 0, 0.8);
+}
+.namefield { display: flex; align-items: center; gap: 8px; }
+/* Body is user-select:none (QA); inputs must stay selectable or iOS can't edit them. */
+.namefield input {
+  -webkit-user-select: text; user-select: text;
+  width: 260px; height: 44px; padding: 0 14px; border-radius: 10px; border: 2px solid #d4af37;
+  background: rgba(20, 10, 4, 0.85); color: #ffe9bd; font-size: 20px; letter-spacing: 0.04em; outline: none;
+}
+.namefield input:focus { border-color: #ffe9bd; box-shadow: 0 0 0 3px rgba(255, 214, 120, 0.3); }
+.namedie {
+  width: 44px; height: 44px; padding: 4px; flex: none; cursor: pointer; border-radius: 10px;
+  border: 2px solid #8a6a2a; background: radial-gradient(circle at 50% 40%, #a3a3a3, #6e6e6e);
+}
+.namedie svg { width: 100%; height: 100%; display: block; }
+.namedie:hover { filter: brightness(1.12); }
+.namebtns { display: flex; gap: 12px; }
+.namebtn {
+  padding: 10px 28px; font-size: 16px; font-weight: 400; letter-spacing: 0.06em; border-radius: 10px; cursor: pointer;
+  border: 2px solid #d4af37; color: #ffe9bd; text-shadow: 0 1px 3px #000;
+  background: linear-gradient(180deg, #4a3010, #241407); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+}
+.namebtn.primary { background: linear-gradient(180deg, #a87418, #5a3510); border-color: #ffe9bd; min-width: 120px; }
+.namebtn:hover { filter: brightness(1.18); }
+.settings .mapback {
+  padding: 10px 28px; font-size: 16px; letter-spacing: 0.06em; border-radius: 10px;
+  border: 2px solid #d4af37; cursor: pointer; color: #ffe9bd; text-shadow: 0 1px 3px #000;
+  background: linear-gradient(180deg, #4a3010, #241407); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+}
+.setpanel {
+  display: flex; flex-direction: column; gap: 14px; width: min(620px, calc(100vw - 32px)); padding: 18px 22px;
+  border-radius: 12px; border: 2px solid rgba(212, 175, 55, 0.7); background: rgba(28, 16, 6, 0.86);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.6);
+}
+.setrow { display: flex; align-items: center; gap: 14px; color: #ffe9bd; text-shadow: 0 1px 3px #000; }
+.setlbl { flex: none; width: 120px; font-size: 15px; letter-spacing: 0.12em; color: rgba(255, 233, 189, 0.8); }
+.setrow input[type=range] { flex: 1; min-width: 0; height: 28px; accent-color: #d4af37; cursor: pointer; }
+.setrow em { flex: none; width: 48px; text-align: right; font-style: normal; color: #ffd678; }
+.setname { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; flex: 1; min-width: 0; }
+.setname > b { font-weight: 400; font-size: 20px; color: #ffd678; }
+.setname small { font-size: 12px; color: rgba(255, 233, 189, 0.65); }
+.setname .namefield { width: 100%; }
+.setname .namefield input { flex: 1; min-width: 0; width: auto; }
+.setname .namebtn { padding: 10px 16px; }
+.setlogin {
+  padding: 0; border: 0; background: none; cursor: pointer; font-size: 13px; color: rgba(255, 214, 120, 0.85);
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.setseg { display: flex; border-radius: 10px; overflow: hidden; border: 2px solid #d4af37; }
+.setseg button {
+  padding: 8px 22px; border: 0; cursor: pointer; font-size: 15px; letter-spacing: 0.08em;
+  background: rgba(20, 10, 4, 0.85); color: rgba(255, 233, 189, 0.6);
+}
+.setseg button[aria-pressed="true"] { background: linear-gradient(180deg, #a87418, #5a3510); color: #fff7e0; }
+@media (max-height: 620px) {
+  .nameprompt, .settings { gap: 10px; }
+  .nameprompt h2, .settings h2 { font-size: 22px; }
+  .setpanel { gap: 8px; padding: 12px 16px; }
+  .setlbl { width: 96px; font-size: 13px; }
+  .namefield input { height: 38px; font-size: 17px; }
+  .namedie { width: 38px; height: 38px; }
+  .namebtn, .settings .mapback { padding: 8px 22px; }
+}
 /* Round line: one line at every QA size (the map name made it wrap at 800px:
    an absolute box at left:50% only gets half the width to shrink into). */
 .roundline { white-space: nowrap; }
