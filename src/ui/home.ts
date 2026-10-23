@@ -4,6 +4,7 @@ import { createSway, type Sway } from "../render/sway";
 import { createCowboy, paintGun, type Cowboy } from "../render/cowboy";
 import { loadCowboyGlb, preloadCowboyGlb, swapCowboy, type CowboyGlb, type CowboyDims } from "../render/cowboyGlb";
 import { loadStreetGlb, streetGlbReady, type StreetSet } from "../render/streetGlb";
+import { allLoaded, loadFraction } from "../render/loadProgress";
 import { loadMapSet, preloadSet, type MapSet } from "../render/setGlb";
 import { MAPS, MAP_CHOICES, pickMap, mapLabel, isMapChoice, cssSky, type MapId, type MapChoice } from "../render/maps";
 import { foeLookFor, pickSeriesFoe, FOE_LOOKS, type FoeLookId } from "../render/foes";
@@ -37,6 +38,8 @@ const FIRST_TO = Math.ceil(BEST_OF / 2);
 // the fire gate below is the gameplay rule, on the fixed clock.
 /** Revive card: auto "stay down" after this (bots + QA flow through). */
 const REVIVE_WAIT_MS = 4000;
+/** A cold duel plays on the procedural stand-ins after this long (slow data). */
+const LOAD_MAX_MS = 20000;
 const DRAW_TICKS = 10; // 0.167s at 60Hz: no shot before the gun clears the holster
 // Last known OS pointer (survives across rounds): a new round's crosshair
 // starts where the mouse really is instead of a guessed screen point.
@@ -571,7 +574,10 @@ function runDuel(
   let playerSway: Sway | null = null;
   let foeSway: Sway | null = null;
   const base = import.meta.env.BASE_URL;
-  void loadCowboyGlb(`${base}models/cowboy_hero.glb`, "H").then(async (m) => {
+  // What the loading bar waits on (cold visit, see tickLoading).
+  const assetUrls = [`${base}models/cowboy_hero.glb`, `${base}models/${foeLook.glb}`];
+  const assetsSwapped: Promise<unknown>[] = [];
+  assetsSwapped.push(loadCowboyGlb(`${base}models/cowboy_hero.glb`, "H").then(async (m) => {
     if (m && alive) await prepare(m.group); // new shaders compile off the main thread first
     if (m && alive) {
       player = swapCowboy(scene, player, m);
@@ -589,8 +595,8 @@ function runDuel(
       if (playerDoll) playerDoll.dispose();
       playerDoll = createRagdoll(scene, player.parts, gun.id, faceOf("player"));
     }
-  });
-  void loadCowboyGlb(`${base}models/${foeLook.glb}`, "O").then(async (m) => {
+  }));
+  assetsSwapped.push(loadCowboyGlb(`${base}models/${foeLook.glb}`, "O").then(async (m) => {
     if (m && alive) await prepare(m.group);
     if (m && alive) {
       foe = swapCowboy(scene, foe, m);
@@ -604,7 +610,7 @@ function runDuel(
       if (foeDoll) foeDoll.dispose();
       foeDoll = createRagdoll(scene, foe.parts, gun.id, faceOf("foe"));
     }
-  });
+  }));
   // Blender street set swaps over the procedural block when ready.
   // Its ambient life (signs, horse, tumbleweed) is posed from wall time in
   // frame(); windows/lanterns glow by time of day (noon dark -> night lit).
@@ -614,7 +620,8 @@ function runDuel(
     // The procedural stand-in only while the GLB is still downloading (first
     // visit) or if it fails; a parsed street lands before the first frame.
     if (!streetGlbReady(url)) buildProceduralStreet();
-    void loadStreetGlb(url, distM).then(async (s) => {
+    assetUrls.push(url);
+    assetsSwapped.push(loadStreetGlb(url, distM).then(async (s) => {
       if (!alive) return;
       if (!s) { buildProceduralStreet(); return; }
       await prepare(s.group); // its shaders compile off the main thread first
@@ -626,7 +633,7 @@ function runDuel(
       s.setGlow(hellRound ? 1 : [0, 0.55, 1][Math.min(stageIdx, 2)]);
       scene.add(s.group);
       street = s;
-    });
+    }));
   }
   // The other maps: the procedural street never shows (the recoloured arena
   // floor + sky hold until the set lands, ~instant once cached).
@@ -644,7 +651,8 @@ function runDuel(
       const old = scene.getObjectByName(n);
       if (old) old.visible = false;
     }
-    void loadMapSet(`${base}models/${mapDef.glb}`, distM, mapDef.paintGain).then(async (s) => {
+    assetUrls.push(`${base}models/${mapDef.glb}`);
+    assetsSwapped.push(loadMapSet(`${base}models/${mapDef.glb}`, distM, mapDef.paintGain).then(async (s) => {
       if (!s) return;
       if (!alive) { s.dispose(); return; }
       lookMapSet(s, stageIdx, hellRound);
@@ -652,8 +660,25 @@ function runDuel(
       if (!alive) { s.dispose(); return; }
       scene.add(s.group);
       mapSet = s;
-    });
+    }));
   }
+  // Cold visit (2026-10-23): a first-time player (fresh browser) got the
+  // procedural stand-ins while ~1.7MB of GLBs downloaded. The duel now waits
+  // behind a loading bar (the boot splash's look) until the rigs + set have
+  // swapped in and the first frame is drawn, LOAD_MAX_MS at most (then it
+  // plays on the stand-ins, which swap later as before). Cached duels never
+  // show it; Focus cannot start until the canvas is live either way.
+  let assetsIn = false;
+  void Promise.all(assetsSwapped.map((p) => p.catch(() => undefined))).then(() => { assetsIn = true; });
+  let loading = true;
+  const loadT0 = performance.now();
+  let loadingEl: HTMLElement | null = allLoaded(assetUrls) ? null : el(`<div class="boot duel-loading">
+    <div class="boot-title"><span class="t1">HIGH NOON</span><span class="t2">DUEL</span></div>
+    <div class="boot-bar det"><i></i></div>
+    <small>LOADING ${mapDef.name}</small>
+  </div>`);
+  const loadBar = loadingEl?.querySelector<HTMLElement>(".boot-bar i") ?? null;
+  if (loadingEl) root.appendChild(loadingEl);
   const playerYaw = player.group.rotation.y;
 
   const hud = el(`<div class="hud">
@@ -1513,7 +1538,7 @@ function runDuel(
   }
 
   function beginFocus(): void {
-    if (machine.phase !== "ready") return;
+    if (machine.phase !== "ready" || loading) return;
     machine.startFocus();
     cue.textContent = "FOCUS! 3.0s";
     sub.textContent = coarse ? "Tap when the marker is on the gold arc" : "SPACE / ENTER when the marker is on the gold arc · don't click";
@@ -2524,9 +2549,24 @@ function runDuel(
     d.place(shadowFeet, CAPSULE_FOR_POSE[wound].headY, hp <= 0 || !!doll?.fallen);
   }
 
+  /** Per frame until the duel is ready to play (cold-visit loading bar). */
+  function tickLoading(): void {
+    if (!loading) return;
+    const live = drawState === "live";
+    if (((assetsIn || !loadingEl) && live) || performance.now() - loadT0 > LOAD_MAX_MS) {
+      loading = false;
+      loadingEl?.remove();
+      loadingEl = null;
+      // The mouse already waiting in the holster zone starts Focus now.
+      if (!coarse && pointerKnown && inZone(pointerPx.x, pointerPx.y)) beginFocus();
+      return;
+    }
+    if (loadBar) loadBar.style.width = `${Math.round((loadFraction(assetUrls) * 0.9 + (assetsIn && live ? 0.1 : 0)) * 100)}%`;
+  }
   function frame(): void {
     if (!alive) return;
     raf = requestAnimationFrame(frame);
+    tickLoading();
     const rawDt = clock.getDelta();
     const dt = Math.min(rawDt, 0.1);
     // Watchdog on WALL time: the clamped dt hid 300ms frames as 100ms and

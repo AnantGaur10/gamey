@@ -53,6 +53,11 @@ button, input, select, textarea { font-family: inherit; }
 .boot.failed .boot-bar { display: none; }
 .boot.failed .boot-fail { display: flex; }
 @media (prefers-reduced-motion: reduce) { .boot-bar i { animation: none; width: 100%; opacity: 0.5; } }
+/* Duel loading (cold visit, home.ts tickLoading): the boot splash with a
+   real progress bar over the duel until its GLBs are in and drawn. */
+.boot.duel-loading { z-index: 30; pointer-events: auto; }
+.boot-bar.det i { width: 0; animation: none; opacity: 1; transition: width 0.25s ease-out; }
+.duel-loading small { margin-top: -10px; font-size: 13px; letter-spacing: 0.2em; color: rgba(255, 233, 189, 0.7); }
 /* Live menu backdrop (ui/menuScene.ts): its own fixed layer behind #app, so
    home / shop / map screens keep it running. Canvas fades in once the first
    standoff is built (CSS sky until then); .mfade blacks out between loops. */

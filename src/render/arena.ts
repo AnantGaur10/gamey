@@ -131,6 +131,9 @@ let postOff = false;
 
 // Right-shoulder perspective camera (see createArena). Offsets in metres
 // from the player's feet: back along the duel line, out to the side, up.
+/** prepare() never holds a reveal longer than this (slow / cold shader cache). */
+const PREPARE_MAX_MS = 6000;
+
 const FOV_Y = 40;
 const CAM_BACK = 3.1;
 const CAM_SIDE = -1.25; // negative: right of the player as seen from behind
@@ -432,8 +435,8 @@ export function createArena(distM: number): {
       compiled programs and the session caches stay for the next arena. */
   release(): void;
   /** Compile `obj`'s shaders (lit by this scene) without blocking the main
-      thread (KHR_parallel_shader_compile); resolves at once when nothing new
-      had to compile. Add late arrivals (GLB sets) only after it resolves,
+      thread (KHR_parallel_shader_compile); resolves once every program is
+      linked (at once when all were cached), PREPARE_MAX_MS at the latest. Add late arrivals (GLB sets) only after it resolves,
       or their first frame stalls on the compile. Never rejects. */
   prepare(obj: THREE.Object3D): Promise<void>;
   /** World metres per CSS px at a world point (perspective: depth-dependent). */
@@ -965,6 +968,34 @@ export function createArena(distM: number): {
     sun.visible = f.sun;
   }
 
+  /** Our own compileAsync poll (2026-10-23). three's throws inside its
+      setTimeout when a material is disposed mid-compile (the procedural
+      stand-in cowboy swapped for its GLB on a cold first visit), so its
+      promise never settled and the duel canvas stayed hidden for good.
+      A disposed material has nothing left to wait for; PREPARE_MAX_MS caps
+      a slow driver (cold D3D shader cache): the first draw then finishes
+      the links itself. */
+  function programsReady(mats: Set<THREE.Material>): Promise<void> {
+    const t0 = performance.now();
+    return new Promise((resolve) => {
+      const check = (): void => {
+        for (const m of mats) {
+          try {
+            const prog = renderer.properties.has(m)
+              ? (renderer.properties.get(m) as { currentProgram?: { isReady(): boolean } }).currentProgram
+              : undefined;
+            if (!prog || prog.isReady()) mats.delete(m);
+          } catch {
+            mats.delete(m);
+          }
+        }
+        if (mats.size === 0 || performance.now() - t0 > PREPARE_MAX_MS) resolve();
+        else window.setTimeout(check, 16);
+      };
+      check();
+    });
+  }
+
   function render(): void {
     renderer.info.reset();
     if (post) post.render(scene, camera);
@@ -977,16 +1008,12 @@ export function createArena(distM: number): {
     renderer,
     render,
     prepare(obj) {
-      const before = renderer.info.programs?.length ?? 0;
       try {
-        if (renderer.extensions.has("KHR_parallel_shader_compile")) {
-          const ready = renderer.compileAsync(obj, camera, scene);
-          if ((renderer.info.programs?.length ?? 0) === before) return Promise.resolve();
-          return ready.then(() => undefined, () => undefined);
-        }
-        // No parallel compile (some Safari / software GL): start the links
-        // now, the first draw finishes them (compileAsync would only warn).
-        renderer.compile(obj, camera, scene);
+        const mats = renderer.compile(obj, camera, scene);
+        // No parallel compile (some Safari / software GL): compile() started
+        // the links, the first draw finishes them.
+        if (!renderer.extensions.has("KHR_parallel_shader_compile")) return Promise.resolve();
+        return programsReady(mats);
       } catch { /* visual only: the first draw compiles */ }
       return Promise.resolve();
     },
