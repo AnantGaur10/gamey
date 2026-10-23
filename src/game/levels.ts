@@ -27,21 +27,22 @@ export interface Level {
 // Old best-of tiers for scale (AI_ROSTER, round 1 -> 3): 850/1.30/0.35,
 // 700/1.00/0.55, 550/0.80/0.75. Level 1 sits below round 1 (a gentle
 // opener), level 6 around the old round 3, level 10 well past it. Reaction
-// x0.85 (haste) lands level 1 at ~730ms and level 10's last round at ~285ms
-// (floor 180ms); wobble 1.41 -> 0.53. User 2026-10-23: every level 10%
-// harder, reaction x0.9 and accuracy +10% (wobble / 1.1) on the 10-19
-// table (950/1.55 ... 395/0.58, ~810ms / ~300ms, hit rate at 15m ~45% -> ~90%).
+// x0.85 (haste) lands level 1 at ~433ms and level 10 at the 180ms floor
+// from its first round; wobble 1.41 -> 0.53. User 2026-10-23: every level
+// 10% harder (reaction x0.9, accuracy +10% = wobble / 1.1, on the 10-19
+// table 950/1.55 ... 395/0.58, hit rate at 15m ~45% -> ~90%), then every
+// reaction scaled by one factor (same ratios) so level 10 = 180ms.
 export const LEVELS: readonly Level[] = [
-  { name: "GREENHORN GUS", tagline: "Fresh off the farm. Slow hands.", foe: "greenhorn", reactionBaseMs: 855, accuracyMult: 1.41, focusQuality: 0.25 },
-  { name: "BLACK BART", tagline: "Robbed every stage from here to Tucson.", foe: "outlaw", reactionBaseMs: 783, accuracyMult: 1.25, focusQuality: 0.33 },
-  { name: "OLD MOSE", tagline: "Forty years of gold dust. Steady aim.", foe: "prospector", reactionBaseMs: 711, accuracyMult: 1.13, focusQuality: 0.41 },
-  { name: "EL VERDE", tagline: "Two bandoliers, never a missed payday.", foe: "bandido", reactionBaseMs: 648, accuracyMult: 1.02, focusQuality: 0.49 },
-  { name: "CALAMITY KATE", tagline: "Rode with the cavalry. Draws like it.", foe: "kate", reactionBaseMs: 590, accuracyMult: 0.91, focusQuality: 0.56 },
-  { name: "THE PALE RIDER", tagline: "Nobody has seen his face. Nobody alive.", foe: "ghost", reactionBaseMs: 536, accuracyMult: 0.82, focusQuality: 0.63 },
-  { name: "RUBY ROSE", tagline: "Deals cards with one hand. Shoots with the other.", foe: "ruby", reactionBaseMs: 486, accuracyMult: 0.74, focusQuality: 0.7 },
-  { name: "GENTLEMAN JACK", tagline: "Never draws first. Never needs to.", foe: "dandy", reactionBaseMs: 441, accuracyMult: 0.66, focusQuality: 0.77 },
-  { name: "MARSHAL COLE", tagline: "Wore the star. Then sold it.", foe: "marshal", reactionBaseMs: 396, accuracyMult: 0.59, focusQuality: 0.84 },
-  { name: "THE WIDOW", tagline: "Every man she buried drew first.", foe: "widow", reactionBaseMs: 356, accuracyMult: 0.53, focusQuality: 0.9 },
+  { name: "GREENHORN GUS", tagline: "Fresh off the farm. Slow hands.", foe: "greenhorn", reactionBaseMs: 509, accuracyMult: 1.41, focusQuality: 0.25 },
+  { name: "BLACK BART", tagline: "Robbed every stage from here to Tucson.", foe: "outlaw", reactionBaseMs: 466, accuracyMult: 1.25, focusQuality: 0.33 },
+  { name: "OLD MOSE", tagline: "Forty years of gold dust. Steady aim.", foe: "prospector", reactionBaseMs: 423, accuracyMult: 1.13, focusQuality: 0.41 },
+  { name: "EL VERDE", tagline: "Two bandoliers, never a missed payday.", foe: "bandido", reactionBaseMs: 385, accuracyMult: 1.02, focusQuality: 0.49 },
+  { name: "CALAMITY KATE", tagline: "Rode with the cavalry. Draws like it.", foe: "kate", reactionBaseMs: 351, accuracyMult: 0.91, focusQuality: 0.56 },
+  { name: "THE PALE RIDER", tagline: "Nobody has seen his face. Nobody alive.", foe: "ghost", reactionBaseMs: 319, accuracyMult: 0.82, focusQuality: 0.63 },
+  { name: "RUBY ROSE", tagline: "Deals cards with one hand. Shoots with the other.", foe: "ruby", reactionBaseMs: 289, accuracyMult: 0.74, focusQuality: 0.7 },
+  { name: "GENTLEMAN JACK", tagline: "Never draws first. Never needs to.", foe: "dandy", reactionBaseMs: 262, accuracyMult: 0.66, focusQuality: 0.77 },
+  { name: "MARSHAL COLE", tagline: "Wore the star. Then sold it.", foe: "marshal", reactionBaseMs: 236, accuracyMult: 0.59, focusQuality: 0.84 },
+  { name: "THE WIDOW", tagline: "Every man she buried drew first.", foe: "widow", reactionBaseMs: 212, accuracyMult: 0.53, focusQuality: 0.9 },
 ];
 
 export const LEVEL_COUNT = LEVELS.length;
