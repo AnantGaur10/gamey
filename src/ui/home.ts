@@ -107,7 +107,7 @@ export function boot(root: HTMLElement, adapter: PortalAdapter): void {
   // 2026-10-12). In-gameplay, skippable; finishing or skipping it marks it
   // done, so it is never forced again (replay from the home menu / shop).
   // Who counts as new: src/portal/firstLaunch.ts.
-  if (needsTutorial(adapter, progress)) {
+  if (needsTutorial(adapter, progress, isCoarsePointer())) {
     runDuel(root, adapter, "tutorial", audio);
   } else {
     // Players from before names (user 2026-10-23): a random one, renamed in
@@ -905,8 +905,13 @@ function runDuel(
   root.appendChild(foeAmmoEl);
 
   // Holster zone: just below the player's legs, gun-hand side (locked).
-  const zone = el(`<div class="readyzone"><b>HOLSTER</b><small>${coarse ? "tap here" : "mouse here"}</small></div>`);
+  const zone = el(`<div class="readyzone"><b>HOLSTER</b><small>${coarse ? "left thumb" : "mouse here"}</small></div>`);
   root.appendChild(zone);
+  // Touch (user 2026-10-26): the right thumb's pad, bottom right. Focus: the
+  // QTE ring runs on it and only taps on it count. DRAW: it becomes SHOOT
+  // (the left thumb drags the crosshair; a tap anywhere else never fires).
+  const pad = el(`<div class="tpad"><b>TAP</b><small>right thumb</small></div>`);
+  if (coarse) root.appendChild(pad);
 
   let skip: HTMLElement | null = null;
   // Tutorial coach (src/ui/coach.ts): step cards beside the holster zone,
@@ -977,6 +982,12 @@ function runDuel(
   let qteAlpha = 0;
   let qteFrameMs = performance.now();
   let focusEngaged = true;
+  // Touch Focus (user 2026-10-26): the holster thumb has to stay DOWN in
+  // the zone. Lifting it or sliding out restarts Focus like a mouse leaving
+  // the zone; QTE taps come from another finger. Keyed on the input that
+  // started Focus, not on the device (a mouse on a touch device = PC rule).
+  let hold: { id: number; x: number; y: number } | null = null;
+  let focusByTouch = false;
   /** Seconds past the last fixed tick right now: render alpha + wall time
       since that frame, capped at what the next frame could advance. */
   const qteExtra = () =>
@@ -1644,7 +1655,13 @@ function runDuel(
     const y = clamp(hip.y, s / 2 + 8, window.innerHeight - s / 2 - 8);
     zone.style.left = `${x - s / 2}px`;
     zone.style.top = `${y - s / 2}px`;
-    coach?.place(zone.getBoundingClientRect());
+    if (coarse) {
+      const hCss = renderer.domElement.getBoundingClientRect().height || window.innerHeight;
+      const ps = Math.round(clamp(hCss * 0.26, 88, 180));
+      pad.style.width = pad.style.height = `${ps}px`;
+      cylinder.style.right = `calc(${ps + 34}px + env(safe-area-inset-right))`; // left of the pad
+    }
+    coach?.place(zone.getBoundingClientRect(), coarse ? cylinder.getBoundingClientRect().left - 12 : undefined);
   }
   updateZone();
 
@@ -1718,14 +1735,21 @@ function runDuel(
     if (machine.phase !== "ready" || loading) return;
     machine.startFocus();
     cue.textContent = "FOCUS! 3.0s";
-    sub.textContent = coarse ? "Tap when the marker is on the gold arc" : "SPACE / ENTER when the marker is on the gold arc · don't click";
+    sub.textContent = focusSub();
     // The ring on the foe shows the bloom during Focus; the pointer keeps a
     // small fixed cross (OS cursor is hidden in-duel) and gets its bloom
-    // ring back at DRAW.
-    cross.style.display = "block";
+    // ring back at DRAW. Touch has no cursor to stand in for: no crosshair
+    // until DRAW (user 2026-10-26).
+    cross.style.display = focusByTouch ? "none" : "block";
     cross.classList.add("focusing");
     adapter.gameplayStart();
     coach?.step("focus");
+  }
+
+  function focusSub(): string {
+    return focusByTouch
+      ? "Left thumb on the holster · right thumb TAPS the pad on gold"
+      : "SPACE / ENTER when the marker is on the gold arc · don't click";
   }
 
   function inZone(cx: number, cy: number): boolean {
@@ -2492,7 +2516,7 @@ function runDuel(
   // blooms / phone heights).
   const RING_MIN_R = 16;
   function renderQte(needle: number): void {
-    const zr = zone.getBoundingClientRect();
+    const zr = (coarse ? pad : zone).getBoundingClientRect(); // touch: the holster thumb would cover it
     const c = { x: zr.left + zr.width / 2, y: zr.top + zr.height / 2 };
     focusUI.render({
       needle,
@@ -2509,15 +2533,25 @@ function runDuel(
   renderQte(qte.pos);
 
   // ---- input routing ----
-  const touchDown = new Map<number, { x: number; y: number; t: number; moved: boolean }>();
+  // Touch aim (user 2026-10-26): a drag moves the crosshair by the finger's
+  // travel, so it never jumps under the thumb; SHOOT on the pad fires and a
+  // tap anywhere else never does. Aiming fingers keep their last position.
+  const TOUCH_AIM_GAIN = 1.2;
+  const touchAim = { x: 0, y: 0 };
+  const touchDown = new Map<number, { x: number; y: number }>();
+  let lastTouchAt = -1e9;
 
   const onMouseMove = (e: MouseEvent) => {
+    if (performance.now() - lastTouchAt < 1000) return; // a tap's compat mousemove
     pointerPx.x = e.clientX;
     pointerPx.y = e.clientY;
     lastPointer = { x: e.clientX, y: e.clientY };
     pointerKnown = true;
     if (machine.phase === "ready") {
-      if (inZone(e.clientX, e.clientY)) beginFocus();
+      if (inZone(e.clientX, e.clientY) && !hold) {
+        focusByTouch = false;
+        beginFocus();
+      }
     } else if (machine.phase === "draw" || machine.phase === "fire") {
       aimFromClient(e.clientX, e.clientY);
     }
@@ -2529,23 +2563,41 @@ function runDuel(
     if (t.closest?.("button")) return;
     const zx = e.clientX;
     const zy = e.clientY;
-    pointerPx.x = zx;
-    pointerPx.y = zy;
-    if (e.pointerType === "mouse") { lastPointer = { x: zx, y: zy }; pointerKnown = true; }
+    const touch = e.pointerType !== "mouse";
+    if (touch) lastTouchAt = performance.now();
+    else {
+      pointerPx.x = zx;
+      pointerPx.y = zy;
+      lastPointer = { x: zx, y: zy };
+      pointerKnown = true;
+    }
+    const onPad = coarse && !!t.closest?.(".tpad");
+    const onZone = !onPad && (!!t.closest?.(".readyzone") || inZone(zx, zy));
 
     if (machine.phase === "ready") {
-      if (t.closest?.(".readyzone") || inZone(zx, zy)) beginFocus();
-      else if (!coarse) {
+      if (onZone) {
+        if (touch) hold = { id: e.pointerId, x: zx, y: zy };
+        focusByTouch = touch;
+        beginFocus(); // still loading: tickLoading starts it while the thumb holds
+      } else if (touch) {
+        sub.textContent = "LEFT thumb: HOLD the holster zone";
+      } else {
         // PC click elsewhere pre-focus: gentle hint, no penalty.
-        sub.textContent = coarse ? sub.textContent : "Mouse INTO the holster zone first";
+        sub.textContent = "Mouse INTO the holster zone first";
       }
       return;
     }
     if (machine.phase === "focus") {
-      // Touch: any tap is a QTE press. PC: the press is Space/Enter; a
-      // click is a miss (grows bloom), the mouse belongs in the holster.
-      if (coarse) qtePress();
-      else {
+      // Touch: the thumb back on the zone re-engages; a tap on the pad (any
+      // other finger where there is no pad) is a QTE press. PC: the press is
+      // Space/Enter; a click is a miss (grows bloom), the mouse belongs in
+      // the holster.
+      if (touch) {
+        if (onZone && (!hold || !inZone(hold.x, hold.y))) {
+          hold = { id: e.pointerId, x: zx, y: zy };
+          focusByTouch = true;
+        } else if (hold && (onPad || !coarse)) qtePress();
+      } else {
         machine.addMiss();
         qte.stun(); // same 0.4s needle stall as a QTE miss (anti-spam)
         qteSpeedFromBloom();
@@ -2555,53 +2607,46 @@ function runDuel(
       return;
     }
     // draw / fire
-    if (e.pointerType === "mouse") {
-      pointerPx.x = zx;
-      pointerPx.y = zy;
+    if (!touch) {
       aimFromClient(zx, zy);
       if (e.button === 0) attemptFire(zx, zy);
       return;
     }
-    // touch: first finger aims (drag), quick tap or 2nd finger fires.
-    pointerPx.x = zx;
-    pointerPx.y = zy;
-    if (touchDown.size > 0) {
-      aimFromClient(zx, zy);
-      attemptFire(zx, zy);
+    if (onPad) {
+      pad.classList.remove("press");
+      void pad.offsetWidth;
+      pad.classList.add("press");
+      attemptFire(touchAim.x, touchAim.y);
       return;
     }
-    touchDown.set(e.pointerId, { x: zx, y: zy, t: performance.now(), moved: false });
-    aimFromClient(zx, zy);
+    touchDown.set(e.pointerId, { x: zx, y: zy });
   };
   root.addEventListener("pointerdown", onPointerDown);
 
   const onPointerMove = (e: PointerEvent) => {
-    if (e.pointerType !== "touch") return;
-    pointerPx.x = e.clientX;
-    pointerPx.y = e.clientY;
+    if (hold && e.pointerId === hold.id) {
+      hold.x = e.clientX;
+      hold.y = e.clientY;
+    }
     const rec = touchDown.get(e.pointerId);
     if (!rec) return;
-    if (Math.hypot(e.clientX - rec.x, e.clientY - rec.y) > 14) rec.moved = true;
+    const dx = e.clientX - rec.x;
+    const dy = e.clientY - rec.y;
+    rec.x = e.clientX;
+    rec.y = e.clientY;
     if (machine.phase === "draw" || machine.phase === "fire") {
-      aimFromClient(e.clientX, e.clientY);
+      touchAim.x = clamp(touchAim.x + dx * TOUCH_AIM_GAIN, 0, window.innerWidth);
+      touchAim.y = clamp(touchAim.y + dy * TOUCH_AIM_GAIN, 0, window.innerHeight);
+      pointerPx.x = touchAim.x;
+      pointerPx.y = touchAim.y;
+      aimFromClient(touchAim.x, touchAim.y);
     }
   };
   root.addEventListener("pointermove", onPointerMove);
 
   const onPointerUp = (e: PointerEvent) => {
-    if (e.pointerType !== "touch") return;
-    const rec = touchDown.get(e.pointerId);
+    if (hold && e.pointerId === hold.id) hold = null;
     touchDown.delete(e.pointerId);
-    if (!rec) return;
-    const quick = performance.now() - rec.t < 350;
-    const still = Math.hypot(e.clientX - rec.x, e.clientY - rec.y) < 16;
-    if (quick && still && (machine.phase === "draw" || machine.phase === "fire")) {
-      // tap (no drag): fire where it landed. (Was `!still`: only a quick
-      // flick fired and a plain tap never did, against the locked 09-26
-      // "drag aims, quick-tap fires".)
-      aimFromClient(e.clientX, e.clientY);
-      attemptFire(e.clientX, e.clientY);
-    }
   };
   root.addEventListener("pointerup", onPointerUp);
   root.addEventListener("pointercancel", onPointerUp);
@@ -2714,7 +2759,7 @@ function runDuel(
 
   // Initial cue per device.
   cue.textContent = "HOLSTER UP";
-  sub.textContent = coarse ? "TAP the holster zone to begin" : "Move your mouse INTO the holster zone";
+  sub.textContent = coarse ? "LEFT thumb: HOLD the holster zone to begin" : "Move your mouse INTO the holster zone";
   updateZone();
 
   // Shadow decal rides the pelvis (so it follows the ragdoll), shortens with
@@ -2735,7 +2780,9 @@ function runDuel(
       loadingEl?.remove();
       loadingEl = null;
       // The mouse already waiting in the holster zone starts Focus now.
-      if (!coarse && pointerKnown && inZone(pointerPx.x, pointerPx.y)) beginFocus();
+      // So does a thumb already holding it.
+      if (hold && inZone(hold.x, hold.y)) beginFocus();
+      else if (!coarse && pointerKnown && inZone(pointerPx.x, pointerPx.y)) beginFocus();
       return;
     }
     if (loadBar) loadBar.style.width = `${Math.round((loadFraction(assetUrls) * 0.9 + (assetsIn && live ? 0.1 : 0)) * 100)}%`;
@@ -2857,25 +2904,30 @@ function runDuel(
       if (pointerKnown) placeCross(pointerPx.x, pointerPx.y);
     }
     if (machine.phase === "ready") renderQte(qte.pos); // ring rides the holster zone (laid out after the first render)
-    zone.classList.toggle("qting", machine.phase === "focus" && !machine.paused); // label off while the ring runs in it
+    (coarse ? pad : zone).classList.toggle("qting", machine.phase === "focus" && !machine.paused); // label off while the ring runs in it
+    if (coarse) pad.classList.toggle("off", roundOver);
     if (machine.phase === "focus") {
       // PC: the countdown only runs while the pointer stays in the holster
       // zone; leaving it restarts the whole Focus (3.0s, bloom, QTE) on
-      // return (user ask 2026-10-05). Touch: committed once started.
-      const engaged = coarse || inZone(pointerPx.x, pointerPx.y);
+      // return (user ask 2026-10-05). Touch: the same while the holster
+      // thumb is up or off the zone (user 2026-10-26).
+      const engaged = focusByTouch ? !!hold && inZone(hold.x, hold.y) : inZone(pointerPx.x, pointerPx.y);
       if (!engaged && focusEngaged) {
         machine.resetFocus();
         qte.reset();
-      }
+        if (focusByTouch) coach?.step("lifted");
+      } else if (engaged && !focusEngaged && focusByTouch) coach?.step("focus");
       focusEngaged = engaged;
       machine.paused = !engaged;
       if (machine.paused) {
         cue.textContent = "⏸ HOLSTER!";
-        sub.textContent = "Back INTO the holster zone · the countdown restarts";
+        sub.textContent = focusByTouch
+          ? "Thumb back ON the holster · the countdown restarts"
+          : "Back INTO the holster zone · the countdown restarts";
       } else {
         const left = machine.focusTicksLeft() / 60;
         cue.textContent = `FOCUS! ${left.toFixed(1)}s`;
-        sub.textContent = coarse ? "Tap when the marker is on the gold arc" : "SPACE / ENTER when the marker is on the gold arc · don't click";
+        sub.textContent = focusSub();
       }
       renderQte(qte.peek(machine.paused ? 0 : alpha * STEP)); // out of the holster: frozen
       focusUI.setProgress(1 - (machine.bloomDeg - gun.bloomMinDeg) / (gun.bloomStartDeg - gun.bloomMinDeg));
@@ -2887,7 +2939,25 @@ function runDuel(
       cue.textContent = hellRound ? "DRAW! — FIRST HIT WINS" : "DRAW!";
       popCue();
       coach?.step("draw");
-      sub.textContent = coarse ? "Drag to aim · tap to fire!" : "Aim with mouse · click to fire!";
+      sub.textContent = coarse ? "Drag to aim · SHOOT to fire!" : "Aim with mouse · click to fire!";
+      // Touch: the crosshair starts on the parked aim point and the holster
+      // thumb draws: it becomes the aiming finger (drag it out). The pad
+      // turns into SHOOT.
+      const parked = project(aimWorld);
+      touchAim.x = parked.x;
+      touchAim.y = parked.y;
+      if (focusByTouch) {
+        pointerPx.x = parked.x;
+        pointerPx.y = parked.y;
+      }
+      if (hold) {
+        touchDown.set(hold.id, { x: hold.x, y: hold.y });
+        hold = null;
+      }
+      if (coarse) {
+        pad.classList.add("shoot");
+        pad.innerHTML = "<b>SHOOT</b>";
+      }
       focusUI.setVisible(false);
       zone.style.display = "none";
       // Quick-draw starts from wherever the hand rests on the holster (idle

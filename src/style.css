@@ -27,6 +27,9 @@ html, body {
 /* Form controls don't inherit the page font by default. */
 button, input, select, textarea { font-family: inherit; }
 #app { position: fixed; inset: 0; z-index: 1; touch-action: manipulation; }
+/* In a duel the browser gets no touch gestures: a pan claimed the held
+   holster thumb / aiming drag with a pointercancel (2026-10-26). */
+body.in-duel #app, body.in-duel #app * { touch-action: none; }
 /* Boot splash (basic.html): on screen from the first paint until boot()
    clears #app, so a slow phone never stares at a blank frame while the game
    chunks + SDK load. .failed = a chunk failed to download (main.ts). */
@@ -219,7 +222,32 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
   animation: zonepulse 1.2s ease-in-out infinite;
   pointer-events: auto; touch-action: manipulation;
 }
-.readyzone small { font-size: 11px; font-weight: 400; opacity: 0.9; }
+.readyzone small { font-size: 11px; font-weight: 400; opacity: 0.9; white-space: nowrap; }
+@media (max-height: 420px) { .readyzone { font-size: 12px; letter-spacing: 0.02em; } .readyzone small { font-size: 10px; } }
+/* Touch: the right thumb's pad (user 2026-10-26). Focus = QTE taps (the ring
+   draws on it), DRAW = SHOOT. Size + the cylinder's spot: updateZone(). */
+.tpad {
+  position: absolute; z-index: 5; right: calc(20px + env(safe-area-inset-right)); bottom: calc(20px + env(safe-area-inset-bottom));
+  width: 120px; height: 120px; border-radius: 18px; border: 3px dashed rgba(255, 214, 120, 0.95);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  color: #ffe9bd; font-weight: 800; font-size: 15px; letter-spacing: 0.08em;
+  text-shadow: 0 1px 4px rgba(60, 20, 5, 0.9), 0 0 2px #000;
+  pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.tpad small { font-size: 11px; font-weight: 400; opacity: 0.9; }
+/* TAP caption above the pad: the QTE ring fills the pad itself. */
+.tpad:not(.shoot) b, .tpad:not(.shoot) small { position: absolute; white-space: nowrap; }
+.tpad:not(.shoot) b { bottom: calc(100% + 16px); }
+.tpad:not(.shoot) small { bottom: calc(100% + 3px); }
+.tpad.shoot {
+  border: 3px solid #ffd678; border-radius: 50%;
+  background: radial-gradient(circle at 50% 40%, rgba(178, 52, 30, 0.9), rgba(96, 22, 10, 0.92));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55), inset 0 0 0 2px rgba(0, 0, 0, 0.3);
+  font-size: 18px; color: #fff3cf;
+}
+.tpad.shoot.press { animation: padpress 0.14s ease-out; }
+.tpad.off { display: none; }
+@keyframes padpress { 50% { transform: scale(0.9); filter: brightness(1.3); } }
 .readyzone.done { opacity: 0; pointer-events: none; animation: none; transition: opacity 0.25s; }
 @keyframes zonepulse {
   0%, 100% { transform: scale(1); }
@@ -671,6 +699,41 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
   .menu.home .opt small { display: none; }
   .menu.home .opt[data-m="map"] small { display: flex; } /* which map stays visible */
   .menu.home .opt[data-m="standard"] small { display: flex; } /* the ladder level + foe too */
+}
+/* Phones with the browser bar (user 2026-10-26, ~830x320): the options
+   stack climbed into the title. Smaller everything, tighter rows. */
+@media (max-height: 420px) {
+  .menu.home .brand { top: calc(8px + env(safe-area-inset-top)); left: calc(14px + env(safe-area-inset-left)); gap: 8px; }
+  .menu.home .badge svg { width: 34px; height: 34px; }
+  .menu.home h1 .t1 { font-size: 28px; }
+  .menu.home h1 .t2 { font-size: 9px; margin-top: 2px; }
+  .menu.home h1 .t2::before { width: 18px; }
+  .menu.home .opts { left: calc(8px + env(safe-area-inset-left)); bottom: calc(8px + env(safe-area-inset-bottom)); gap: 0; }
+  .menu.home .opt { width: 300px; padding: 3px 12px 3px 16px; gap: 1px; }
+  .menu.home .opt::before { top: 4px; bottom: 4px; }
+  .menu.home .opt .lbl { font-size: 17px; }
+  .menu.home .opt.primary .lbl { font-size: 24px; }
+  .menu.home .opt small { font-size: 9px; }
+  .menu.home .optthumb { width: 26px; height: 15px; }
+  .menu.home .topbar { top: calc(6px + env(safe-area-inset-top)); right: calc(8px + env(safe-area-inset-right)); gap: 6px; }
+  .menu.home .chip { height: 28px; font-size: 13px; padding: 0 12px 0 6px; }
+  .menu.home .chip svg { width: 18px; height: 18px; }
+  .menu.home .mute-btn { width: 28px; height: 28px; }
+  .menu.home .mute-btn svg { width: 16px; height: 16px; }
+  .menu.home .record { bottom: calc(8px + env(safe-area-inset-bottom)); font-size: 10px; }
+  .menu.home .record b { font-size: 14px; }
+}
+/* Portrait phones (user 2026-10-26): the top-right chips sat on the title.
+   Title starts under them and shrinks to fit the width. */
+@media (max-width: 600px) and (min-height: 421px) {
+  .menu.home .brand { top: calc(64px + env(safe-area-inset-top)); left: calc(16px + env(safe-area-inset-left)); gap: 12px; }
+  .menu.home .badge svg { width: 52px; height: 52px; }
+  .menu.home h1 .t1 { font-size: clamp(30px, 9.5vw, 52px); }
+  .menu.home h1 .t2 { font-size: 13px; }
+  .menu.home .opts { left: calc(8px + env(safe-area-inset-left)); }
+  .menu.home .opt { padding-top: 6px; padding-bottom: 6px; }
+  .menu.home .topbar { right: calc(10px + env(safe-area-inset-right)); left: calc(10px + env(safe-area-inset-left)); justify-content: flex-end; gap: 6px; }
+  .menu.home .chip.pname { min-width: 0; flex: 0 1 auto; }
 }
 @media (prefers-reduced-motion: reduce) {
   .menu.home .brand, .menu.home .opt, .menu.home .topbar { animation: none; }

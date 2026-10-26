@@ -18,6 +18,11 @@ import { safeLoad, safeSave } from "../store/SafeStore";
 // game itself and this runs again on the account's save.
 
 const SEEN_KEY = "gamey.tutorialSeen";
+// Two-thumb touch controls (user 2026-10-26: left thumb holds the holster,
+// right thumb the QTE pad, drag aims + a SHOOT button): every touch device
+// sees the tutorial once more, veterans included. Device flag only: the
+// controls belong to the device, not the account.
+const TOUCH_SEEN_KEY = "gamey.touchTutorialSeen";
 
 function hasPlayed(p: Progress): boolean {
   return (
@@ -33,9 +38,11 @@ function hasPlayed(p: Progress): boolean {
   );
 }
 
-/** True only for a first-time player. Settles the answer for players who
-    are not new: the save and the device flag both get the tutorial mark. */
-export function needsTutorial(adapter: PortalAdapter, p: Progress): boolean {
+/** True for a first-time player, and once per touch device for the
+    two-thumb controls. Settles the answer for players who are not new: the
+    save and the device flag both get the tutorial mark. */
+export function needsTutorial(adapter: PortalAdapter, p: Progress, touch: boolean): boolean {
+  if (touch && safeLoad(TOUCH_SEEN_KEY) !== "1") return true;
   const seenHere = safeLoad(SEEN_KEY) === "1";
   if (!p.tutorialDone && !seenHere && !hasPlayed(p)) return true;
   markTutorialSeen(adapter, p);
@@ -45,6 +52,7 @@ export function needsTutorial(adapter: PortalAdapter, p: Progress): boolean {
 /** Tutorial finished or skipped (or the player is not new): never forced again. */
 export function markTutorialSeen(adapter: PortalAdapter, p: Progress = adapter.loadProgress()): void {
   if (safeLoad(SEEN_KEY) !== "1") safeSave(SEEN_KEY, "1");
+  if (safeLoad(TOUCH_SEEN_KEY) !== "1") safeSave(TOUCH_SEEN_KEY, "1");
   if (p.tutorialDone) return;
   p.tutorialDone = true;
   adapter.saveProgress(p);

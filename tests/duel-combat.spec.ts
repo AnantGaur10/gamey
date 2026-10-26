@@ -167,7 +167,7 @@ test.describe('Gamey - Combat', () => {
   });
 
   test('leaving the holster restarts the whole countdown', async ({ page, isMobile }) => {
-    test.skip(isMobile, 'touch has no hover: Focus is committed once started');
+    test.skip(isMobile, 'mouse-hover version; touch = the held holster thumb (same restart)');
     await startStandard(page);
     // 8m: the restart must show in the ring, which is capped at the foe's
     // width (an 18m roll held it at the cap before and after).

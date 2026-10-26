@@ -11,12 +11,13 @@
 // touch glyphs next to the words, no Esc. DOM only, pointer-events none on
 // the live card so it never eats an aim or a tap.
 
-export type CoachStep = "holster" | "retry" | "focus" | "draw" | "shot" | "hit";
+export type CoachStep = "holster" | "retry" | "focus" | "lifted" | "draw" | "shot" | "hit";
 
 export interface Coach {
   step(s: CoachStep, ammoLeft?: number): void;
-  /** Re-anchor beside the holster zone (resize / camera refit). */
-  place(zone: DOMRect): void;
+  /** Re-anchor beside the holster zone (resize / camera refit); `rightEdge`
+      = where the card must end (touch: the QTE / SHOOT pad). */
+  place(zone: DOMRect, rightEdge?: number): void;
   hide(): void;
   /** Rule cards over the finished round; `done` runs on PLAY. */
   rules(done: () => void): void;
@@ -35,21 +36,26 @@ function live(s: CoachStep, coarse: boolean, ammoLeft: number): { t: string; b: 
         t: "1 · HOLSTER UP",
         b: (s === "retry" ? `<em>Out of bullets before he went down: that round is a draw. Again!</em> ` : "")
           + (coarse
-            ? `${TAP} TAP the <b>HOLSTER</b> box to start the 3-second FOCUS countdown.`
+            ? `${TAP} LEFT THUMB: HOLD the <b>HOLSTER</b> box to start the 3-second FOCUS countdown. Keep it down until DRAW: lifting it restarts the countdown.`
             : `${MOUSE} Move your mouse INTO the <b>HOLSTER</b> box to start the 3-second FOCUS countdown. Keep it there: leaving the box restarts the countdown.`),
       };
     case "focus":
       return {
         t: "2 · FOCUS",
         b: (coarse
-          ? `A marker swings round the ring. ${TAP} TAP anywhere when it is on the <b class="gold">GOLD</b> arc.`
+          ? `Left thumb stays on the holster. A marker swings round the ring on the <b>TAP</b> pad: ${TAP} RIGHT THUMB, TAP the pad when it is on the <b class="gold">GOLD</b> arc.`
           : `A marker swings round the ring. Press ${key("SPACE")} or ${key("ENTER")} when it is on the <b class="gold">GOLD</b> arc. Don't click.`)
           + ` Every hit shrinks your crosshair (the bright middle is a PERFECT). A miss freezes the marker for a moment.`,
+      };
+    case "lifted":
+      return {
+        t: "THUMB LIFTED!",
+        b: `${TAP} Your LEFT thumb left the <b>HOLSTER</b>, so the countdown starts over. Put it back and keep it down until DRAW; tap the pad with the RIGHT thumb.`,
       };
     case "draw":
       return {
         t: "3 · DRAW!",
-        b: (coarse ? `${TAP} DRAG to aim at the outlaw, TAP to fire.` : `${MOUSE} Aim at the outlaw with the mouse, CLICK to fire.`)
+        b: (coarse ? `${TAP} LEFT THUMB: DRAG to move the crosshair onto the outlaw. RIGHT THUMB: press <b>SHOOT</b>.` : `${MOUSE} Aim at the outlaw with the mouse, CLICK to fire.`)
           + ` Bullets land anywhere inside the circle. Go for the <b>HEAD</b>: a headshot kills instantly.`,
       };
     case "shot":
@@ -123,11 +129,11 @@ export function mountCoach(root: HTMLElement, coarse: boolean): Coach {
     card.classList.add("in", "on");
   }
 
-  function place(z: DOMRect): void {
+  function place(z: DOMRect, rightEdge?: number): void {
     if (z.width <= 0) return; // zone hidden after DRAW: keep the last spot
     const W = window.innerWidth;
     const left = Math.round(z.right + 14);
-    const right = W - 122; // clear of the cylinder (90px + 20px margin)
+    const right = rightEdge ?? W - 122; // clear of the cylinder (90px + 20px margin)
     card.style.left = `${left}px`;
     card.style.width = `${Math.max(200, Math.min(520, right - left))}px`;
     card.style.bottom = `${Math.max(8, Math.round(window.innerHeight - z.bottom))}px`;

@@ -50,7 +50,9 @@ export default defineConfig({
     __MUSIC_FILES__: JSON.stringify(musicFiles()),
   },
   server: {
+    host: "0.0.0.0",
     port: 5174,
+    allowedHosts: ["approve-operation-prototype-edgar.trycloudflare.com"],
   },
   build: {
     outDir: "dist",
