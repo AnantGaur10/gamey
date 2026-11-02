@@ -1,7 +1,8 @@
 // Download progress of the session's GLBs (2026-10-23), for the duel's
 // loading bar on a cold first visit. The loaders (cowboyGlb, streetGlb,
 // setGlb) feed it from GLTFLoader's onProgress; a URL counts as done once
-// its parse settled (loaded or failed: the procedural fallback takes over).
+// its parse succeeded. A failed URL is forgotten (noteLoadFailed), so the
+// next duel that needs it shows the loading bar again while it retries.
 
 type Entry = { loaded: number; total: number; done: boolean };
 const entries = new Map<string, Entry>();
@@ -20,6 +21,10 @@ export function noteLoadDone(url: string): void {
   const en = entries.get(url) ?? { loaded: 0, total: 0, done: false };
   en.done = true;
   entries.set(url, en);
+}
+
+export function noteLoadFailed(url: string): void {
+  entries.delete(url);
 }
 
 /** Every URL settled this session (cached duel: no loading bar). */

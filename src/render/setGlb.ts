@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { stagePositions, addDirtDetail } from "./arena";
 import { keepOnGpu } from "./gpu";
-import { noteLoadDone, noteLoadProgress } from "./loadProgress";
+import { noteLoadDone, noteLoadFailed } from "./loadProgress";
+import { loadGlbWithRetry } from "./glbLoad";
 
 // Generic loader for the map sets built with scripts/blender/set_kit.py
 // (saloon / falls / town; Main Street keeps streetGlb.ts). Same placement as
@@ -41,8 +42,7 @@ function loadScene(url: string): Promise<THREE.Group | null> {
   if (!p) {
     p = (async () => {
       try {
-        const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-        const gltf = await new GLTFLoader().loadAsync(url, (e) => noteLoadProgress(url, e));
+        const gltf = await loadGlbWithRetry(url);
         keepOnGpu(gltf.scene); // shared by every clone: stays uploaded across rounds
         return gltf.scene;
       } catch (err) {
@@ -51,7 +51,7 @@ function loadScene(url: string): Promise<THREE.Group | null> {
         return null;
       }
     })();
-    void p.finally(() => noteLoadDone(url)); // never rejects (caught above)
+    void p.then((r) => (r ? noteLoadDone(url) : noteLoadFailed(url))); // never rejects (caught above)
     cache.set(url, p);
   }
   return p;

@@ -42,7 +42,7 @@ const FIRST_TO = Math.ceil(BEST_OF / 2);
 /** Revive card: auto "stay down" after this (bots + QA flow through). */
 const REVIVE_WAIT_MS = 4000;
 /** A cold duel plays on the procedural stand-ins after this long (slow data). */
-const LOAD_MAX_MS = 20000;
+const LOAD_MAX_MS = 40000; // a slow phone link gets the real set, not the stand-ins (2026-11-02)
 const DRAW_TICKS = 10; // 0.167s at 60Hz: no shot before the gun clears the holster
 // Last known OS pointer (survives across rounds): a new round's crosshair
 // starts where the mouse really is instead of a guessed screen point.
@@ -595,7 +595,8 @@ function runDuel(
   const run = opts.run;
   // Map (user 2026-10-12): the series / run carries it; tutorial + single
   // duels stay on Main Street. DEV probes can force one.
-  const mapId: MapId = opts.map ?? series?.map ?? run?.map ?? "street";
+  // The tutorial plays on Telegraph Row (user 2026-11-02).
+  const mapId: MapId = opts.map ?? series?.map ?? run?.map ?? (mode === "tutorial" ? "town" : "street");
   const mapDef = MAPS[mapId];
   hideMenuScene(); // one GL context at a time: the duel builds its own arena
   root.innerHTML = "";
@@ -884,14 +885,15 @@ function runDuel(
   const roundLine = el(`<div class="roundline" style="position:absolute;top:calc(76px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);font-size:13px;font-weight:700;letter-spacing:.1em;color:#ffe9bd;text-shadow:0 1px 2px #000,0 0 8px rgba(0,0,0,.95),0 0 3px rgba(0,0,0,.9);pointer-events:none;"></div>`); // dark halo: readable over the full moon (2026-10-21)
   root.appendChild(roundLine);
   function paintRound(): void {
-    // The round's distance shows on every line: it varies 6-25m (user 2026-10-05).
-    const dist = `${Math.round(distM)} M`;
-    const where = mapId === "street" ? dist : `${mapDef.name} · ${dist}`;
-    if (hellRound) { roundLine.textContent = `SUDDEN DEATH — FIRST HIT WINS · ${where}`; return; }
-    if (series && ladder) { roundLine.textContent = `LEVEL ${series.level! + 1} · ${ladder.name} · ROUND ${series.roundIndex + 1} · YOU ${series.pWins} – ${series.fWins} · ${where}`; return; }
-    if (series) { roundLine.textContent = `ROUND ${series.roundIndex + 1} · YOU ${series.pWins} – ${series.fWins} FOE (1ST TO ${FIRST_TO}) · ${where}`; return; }
-    if (run) { roundLine.textContent = `DEATHMATCH · STREAK ${run.streak} · DUEL ${rIdx + 1}/${AI_ROSTER.length} · LOOP ${level + 1} · ${where}`; return; }
-    roundLine.textContent = where;
+    // No distance on the line (user 2026-11-02: it used to show 6-25m);
+    // the map's name shows off Main Street.
+    const where = mapId === "street" ? null : mapDef.name;
+    const line = (...parts: Array<string | null>): string => parts.filter(Boolean).join(" · ");
+    if (hellRound) { roundLine.textContent = line("SUDDEN DEATH — FIRST HIT WINS", where); return; }
+    if (series && ladder) { roundLine.textContent = line(`LEVEL ${series.level! + 1}`, ladder.name, `ROUND ${series.roundIndex + 1}`, `YOU ${series.pWins} – ${series.fWins}`, where); return; }
+    if (series) { roundLine.textContent = line(`ROUND ${series.roundIndex + 1}`, `YOU ${series.pWins} – ${series.fWins} FOE (1ST TO ${FIRST_TO})`, where); return; }
+    if (run) { roundLine.textContent = line(`DEATHMATCH`, `STREAK ${run.streak}`, `DUEL ${rIdx + 1}/${AI_ROSTER.length}`, `LOOP ${level + 1}`, where); return; }
+    roundLine.textContent = line(where);
   }
   paintRound();
   // Ladder intro: who you face, on the first round of a level only.
@@ -2430,7 +2432,7 @@ function runDuel(
       foeAim.applyShotKick();
       foeFired = true;
       gunsmoke.spawn(muzzle, nightBlind); // night: the flash is the only giveaway, so it carries
-      audio.playGunshot(0.6, true); // the foe's shot, down the street
+      audio.playGunshot(0.6, distM); // the foe's shot, down the street: pitch + bass by distance
       foeKickT = 0; // procedural shooting anim: gun-kick decay in frame loop
       const lethal = bodyDamage(GUNS.default.baseDamage, distM) >= playerHP;
       const b = sim.fire({ from: muzzle, dir, distM, shooter: "foe", gunId: "default", lethal });

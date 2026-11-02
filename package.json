@@ -10,6 +10,7 @@
     "size": "node scripts/size-check.mjs dist 20",
     "test": "npm run typecheck && npm run build && npm run size && npm run test:physics",
     "play": "bash scripts/play.sh",
+    "tunnel": "bash scripts/tunnel.sh",
     "play:mobile": "VIEWPORT=800x450 bash scripts/play.sh",
     "play:record": "RECORD_VIDEO=1 bash scripts/play.sh",
     "test:headed": "bash scripts/test-visual.sh",

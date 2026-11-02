@@ -16,8 +16,9 @@ export interface AudioManager {
   setBed(layers: BedLayer[]): void;
   setMusicVolume(v: number): void;
   /** Revolver shot: the pistol sample when it has loaded, else the Web Audio
-   *  synth. far = the foe's shot down the street: quieter, duller, more echo. */
-  playGunshot(volume?: number, far?: boolean): void;
+   *  synth. distM = how far the shooter is (0 = your own gun): pitch, bass,
+   *  brightness, level and echo follow it. */
+  playGunshot(volume?: number, distM?: number): void;
   /** Fetch + decode the gunshot sample ahead of the first shot. */
   warmup(): void;
   /** Gusting wind bed for the duel (Web Audio noise). 0 = off ... 1 = gale;
@@ -108,17 +109,35 @@ export function createAudioManager(): AudioManager {
   }
 
   // --- decoded samples (fetched once per session) --------------------------
+  // Decoded on an OfflineAudioContext: it needs no user gesture, so the
+  // pistol is ready before the first shot even when the first launch drops
+  // straight into the tutorial (the live context only exists after a click,
+  // and decoding on it left the opening shots on the synth, user 2026-11-02).
+  // An AudioBuffer plays on any context.
   const buffers = new Map<string, Promise<AudioBuffer | null>>();
   const ready = new Map<string, AudioBuffer>();
-  function loadBuffer(ctx: AudioContext, file: string): Promise<AudioBuffer | null> {
+  let decoder: BaseAudioContext | null = null;
+  function decodeCtx(): BaseAudioContext | null {
+    if (!decoder) {
+      try {
+        const Off = (window as any).OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+        decoder = Off ? new Off(2, 1, 44100) : audioContext;
+      } catch {
+        decoder = audioContext;
+      }
+    }
+    return decoder ?? audioContext;
+  }
+  function loadBuffer(file: string): Promise<AudioBuffer | null> {
     let p = buffers.get(file);
     if (!p) {
       const url = audioUrl(file);
-      p = !url
+      const dec = decodeCtx();
+      p = !url || !dec
         ? Promise.resolve(null)
         : fetch(url)
             .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${r.status}`))))
-            .then((a) => new Promise<AudioBuffer>((res, rej) => ctx.decodeAudioData(a, res, rej)))
+            .then((a) => new Promise<AudioBuffer>((res, rej) => dec.decodeAudioData(a, res, rej)))
             .then((b) => { ready.set(file, b); return b; })
             .catch((err) => { log(`audio ${file} failed`, err); buffers.delete(file); return null; });
       buffers.set(file, p);
@@ -171,7 +190,7 @@ export function createAudioManager(): AudioManager {
         g.connect(l.bus === 'music' ? mbus(ctx) : bus(ctx));
         const p: Playing = { gain: g, src: null, dead: false };
         bed.set(file, p);
-        void loadBuffer(ctx, file).then((buf) => {
+        void loadBuffer(file).then((buf) => {
           if (!buf || p.dead) return;
           const src = ctx.createBufferSource();
           src.buffer = buf;
@@ -194,8 +213,7 @@ export function createAudioManager(): AudioManager {
   }
 
   function warmup(): void {
-    const ctx = getAudioContext();
-    if (ctx) void loadBuffer(ctx, 'gunshot.mp3');
+    void loadBuffer('gunshot.mp3');
   }
 
   // --- synth SFX bus (gunshots + wind): one gain so mute / ad pauses
@@ -289,37 +307,48 @@ export function createAudioManager(): AudioManager {
     src.stop(t + attack + decay + 0.05);
   }
 
-  /** The pistol sample (Michel Baradari, CC-BY 3.0): same voice chain as the
-   *  synth (distance lowpass + street echo send), pitch jittered per shot. */
-  function playGunshotSample(ctx: AudioContext, buf: AudioBuffer, volume: number, far: boolean): void {
+  /** The pistol sample (Michel Baradari, CC-BY 3.0), shaped per shot by how
+   *  far away it is (user 2026-11-02): k 0 = in your own hand ... 1 = 25m down
+   *  the street. Near = full pitch, chesty bass, bright; far = lower pitch,
+   *  thin bass, dull, quieter, more echo. Pitch also jitters per shot. */
+  function playGunshotSample(ctx: AudioContext, buf: AudioBuffer, volume: number, k: number): void {
+    const lerp = (a: number, b: number) => a + (b - a) * k;
     const t = ctx.currentTime + 0.005;
     const src = ctx.createBufferSource();
     src.buffer = buf;
-    src.playbackRate.value = (far ? 0.9 : 1) * (0.95 + Math.random() * 0.1);
+    src.playbackRate.value = lerp(1, 0.84) * (0.96 + Math.random() * 0.08);
     const voice = ctx.createGain();
-    voice.gain.value = volume * (far ? 0.55 : 0.9);
+    voice.gain.value = volume * lerp(0.9, 0.5);
+    const bass = ctx.createBiquadFilter();
+    bass.type = 'lowshelf';
+    bass.frequency.value = 160;
+    bass.gain.value = lerp(6, -4); // dB
     const tone = ctx.createBiquadFilter();
     tone.type = 'lowpass';
-    tone.frequency.value = far ? 2600 : 14000;
+    tone.frequency.value = 14000 * Math.pow(2000 / 14000, k); // air eats the highs
     src.connect(voice);
-    voice.connect(tone);
+    voice.connect(bass);
+    bass.connect(tone);
     tone.connect(bus(ctx));
     const send = ctx.createGain();
-    send.gain.value = far ? 0.8 : 0.4;
+    send.gain.value = lerp(0.35, 0.85);
     tone.connect(send);
     send.connect(echoSend(ctx));
     src.start(t);
-    src.onended = () => { try { voice.disconnect(); tone.disconnect(); send.disconnect(); } catch { /* noop */ } };
+    src.onended = () => { try { voice.disconnect(); bass.disconnect(); tone.disconnect(); send.disconnect(); } catch { /* noop */ } };
   }
 
-  function playGunshot(volume: number = 0.85, far = false): void {
+  /** distM: how far the shooter is (0 = the player's own gun). */
+  function playGunshot(volume: number = 0.85, distM = 0): void {
     try {
       if (silent()) return;
       const ctx = getAudioContext();
       if (!ctx) return;
+      const k = Math.max(0, Math.min(1, (distM - 3) / 22));
+      const far = k > 0.4;
       const buf = ready.get('gunshot.mp3');
-      if (buf) return playGunshotSample(ctx, buf, volume, far);
-      void loadBuffer(ctx, 'gunshot.mp3'); // next shot has it; this one is synth
+      if (buf) return playGunshotSample(ctx, buf, volume, k);
+      void loadBuffer('gunshot.mp3'); // next shot has it; this one is synth
       const t = ctx.currentTime + 0.005;
       // Per-shot voice: dry to the bus, plus a send into the street echo.
       const voice = ctx.createGain();

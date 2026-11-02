@@ -64,7 +64,8 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 5174,
-    allowedHosts: ["approve-operation-prototype-edgar.trycloudflare.com"],
+    // DEV only: any Cloudflare quick tunnel (npm run tunnel; a new tunnel = a new host).
+    allowedHosts: [".trycloudflare.com"],
   },
   build: {
     outDir: "dist",

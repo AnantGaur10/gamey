@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { stagePositions, addDirtDetail } from "./arena";
 import { keepOnGpu } from "./gpu";
-import { noteLoadDone, noteLoadProgress } from "./loadProgress";
+import { noteLoadDone, noteLoadFailed } from "./loadProgress";
+import { loadGlbWithRetry } from "./glbLoad";
 
 /** Blender street set (scripts/blender/build_street.py) + its ambient life. */
 export interface StreetSet {
@@ -30,8 +31,7 @@ function loadScene(url: string): Promise<THREE.Group | null> {
   if (!p) {
     p = (async () => {
       try {
-        const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-        const scene = (await new GLTFLoader().loadAsync(url, (e) => noteLoadProgress(url, e))).scene;
+        const scene = (await loadGlbWithRetry(url)).scene;
         keepOnGpu(scene); // shared by every clone: stays uploaded across rounds
         parsed.add(url);
         return scene;
@@ -41,7 +41,7 @@ function loadScene(url: string): Promise<THREE.Group | null> {
         return null;
       }
     })();
-    void p.finally(() => noteLoadDone(url)); // never rejects (caught above)
+    void p.then((r) => (r ? noteLoadDone(url) : noteLoadFailed(url))); // never rejects (caught above)
     cache.set(url, p);
   }
   return p;

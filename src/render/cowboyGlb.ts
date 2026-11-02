@@ -2,7 +2,8 @@ import * as THREE from "three";
 import { makeGunHolster, type Cowboy } from "./cowboy";
 import { addRimLight } from "./arena";
 import { keepOnGpu } from "./gpu";
-import { noteLoadDone, noteLoadProgress } from "./loadProgress";
+import { noteLoadDone, noteLoadFailed } from "./loadProgress";
+import { loadGlbWithRetry } from "./glbLoad";
 import { pivotMesh, type SwayNode } from "./sway";
 import { CAPSULE_FOR_POSE, type HatProfile } from "../game/projectiles";
 
@@ -125,8 +126,7 @@ function loadTemplate(url: string): Promise<Gltf | null> {
   if (!p) {
     p = (async () => {
       try {
-        const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-        const gltf = await new GLTFLoader().loadAsync(url, (e) => noteLoadProgress(url, e));
+        const gltf = await loadGlbWithRetry(url);
         keepOnGpu(gltf.scene); // shared by every clone: stays uploaded across rounds
         return gltf;
       } catch (err) {
@@ -135,7 +135,7 @@ function loadTemplate(url: string): Promise<Gltf | null> {
         return null;
       }
     })();
-    void p.finally(() => noteLoadDone(url)); // never rejects (caught above)
+    void p.then((r) => (r ? noteLoadDone(url) : noteLoadFailed(url))); // never rejects (caught above)
     templates.set(url, p);
   }
   return p;
