@@ -350,6 +350,11 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 .gcard.on { border-color: #ffd678; box-shadow: 0 0 0 1px #ffd678, 0 4px 22px rgba(212, 175, 55, 0.45); }
 .ghead { display: flex; align-items: center; gap: 4px; font-size: 18px; letter-spacing: 0.08em; color: #ffd678; }
 .ghead .sicon { width: 48px; height: 28px; }
+/* Gun model slot (gunViewer.ts): the backdrop renderer's copy lands in its canvas. */
+.gview { position: relative; height: 104px; border-radius: 8px; overflow: hidden; background: #1a1007; box-shadow: inset 0 0 0 1px rgba(212, 175, 55, 0.3); }
+.gview canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+.gview canvas:active { cursor: grabbing; }
+.gview:not(.live) { display: none; }
 .gstat { display: grid; grid-template-columns: 78px 1fr 42px; align-items: center; gap: 8px; font-size: 11px; letter-spacing: 0.06em; }
 .gstat i { height: 8px; border-radius: 4px; background: rgba(0, 0, 0, 0.55); box-shadow: inset 0 0 0 1px rgba(212, 175, 55, 0.3); overflow: hidden; }
 .gstat b { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, #a8761c, #ffd678); }
@@ -374,6 +379,7 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
   .gstat i { height: 10px; }
   .gstat em { font-size: 14px; }
   .gperk { font-size: 14px; }
+  .gview { height: 140px; }
   .shop button { font-size: 17px; }
 }
 /* Rye sets taller lines than the old system face: at 800x450 the armory
@@ -394,6 +400,7 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
   .gstat { grid-template-columns: 64px 1fr 36px; gap: 6px; font-size: 10px; }
   .gstat i { height: 6px; }
   .gperk { font-size: 11px; }
+  .gview { height: 58px; }
 }
 /* Shop / revive icons: revolver finishes + first aid kit (inline SVG). */
 .sicon { width: 30px; height: 20px; vertical-align: middle; margin-right: 8px; flex: none; }

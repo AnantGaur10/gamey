@@ -28,6 +28,7 @@ import { storagePersisted } from "../store/SafeStore";
 import { needsTutorial, markTutorialSeen } from "../portal/firstLaunch";
 import { createAudioManager, HAS_MUSIC, type AudioManager } from "../audio/AudioManager";
 import { installUiSfx } from "./uiSfx";
+import { mountGunViews } from "./gunViewer";
 import { MENU_BED, mapBed } from "../audio/beds";
 import { initDeviceTier, deviceTier } from "../render/device";
 import { randomCowboyName, cleanName, escapeHtml, displayName, NAME_MAX } from "./names";
@@ -432,7 +433,7 @@ const AID_KIT_ICON = `<svg class="sicon" viewBox="0 0 48 36" aria-hidden="true">
     straight from GUNS (damage, accuracy = the tightest Focus ring, fire
     rate = 1 / cooldown), perk line, BUY or a checkbox EQUIP button. */
 const SHOP_GUNS: Array<{ id: "default" | "lifesteal" | "gold"; name: string; perk: string }> = [
-  { id: "default", name: "STARTER", perk: "Hits hardest, fires fastest." },
+  { id: "default", name: "DAMAGE", perk: "Hits hardest, fires fastest." },
   { id: "lifesteal", name: "LIFESTEAL", perk: `Every body hit heals ${GUNS.lifesteal.extraValue * 100}% of the damage (max ${LIFESTEAL_CAP_PER_HIT}).` },
   { id: "gold", name: "GOLD", perk: `+${Math.ceil(GOLD_KILL_BONUS * GUNS.gold.extraValue)} gold for every round you win.` },
 ];
@@ -450,6 +451,7 @@ function gunCard(id: (typeof SHOP_GUNS)[number]["id"], name: string, perk: strin
     : `<button class="gequip" data-equip="${id}" role="checkbox" aria-checked="${equipped}"><span class="gbox">${equipped ? CHECK_ICON : ""}</span>${equipped ? "EQUIPPED" : "EQUIP"}</button>`;
   return `<div class="gcard g-${id}${equipped ? " on" : ""}">
     <div class="ghead">${gunIcon(id)}<span>${name}</span></div>
+    <div class="gview" data-gview="${id}" title="Drag to turn it"></div>
     ${bar("DAMAGE", g.baseDamage / 60, String(g.baseDamage))}
     ${bar("ACCURACY", acc / 100, String(acc))}
     ${bar("FIRE RATE", rate / 3, `${rate.toFixed(1)}/s`)}
@@ -476,12 +478,14 @@ function showShop(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager
     <div class="srow"><button data-b="tutorial">REPLAY TUTORIAL</button><button data-b="back">BACK</button></div>
   </div>`);
   root.appendChild(shop);
+  // The real revolvers, turning in their cards (drag to rotate).
+  mountGunViews(Array.from(shop.querySelectorAll<HTMLElement>("[data-gview]")).map((el) => ({ el, gunId: el.dataset.gview! })));
   const msg = shop.querySelector(".smsg") as HTMLElement;
   const refresh = () => showShop(root, adapter, audio);
   const buy = (id: string, price: number) => {
     const q = adapter.loadProgress();
     if (q.gunsOwned.includes(id)) { msg.textContent = "Already owned — equip it."; return; }
-    if (!can(price)) { msg.textContent = "Not enough gold — win duels first (never gated, starter is competitive)."; return; }
+    if (!can(price)) { msg.textContent = "Not enough gold — win duels first (the DAMAGE gun is competitive)."; return; }
     q.gold -= price;
     q.gunsOwned.push(id);
     adapter.saveProgress(q);

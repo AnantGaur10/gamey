@@ -55,6 +55,15 @@ interface MenuScene {
 
 let live: MenuScene | null = null;
 
+/** Drawn on the backdrop's renderer BEFORE each backdrop frame (the armory's
+    gun views copy their corner out, then the backdrop paints over it). Return
+    false to unregister. One WebGL context per session. */
+type PreRender = (renderer: THREE.WebGLRenderer) => boolean;
+let preRender: PreRender | null = null;
+export function setMenuPreRender(fn: PreRender | null): void {
+  preRender = fn;
+}
+
 /** Map on the live backdrop, null when none is up. */
 export function menuMapId(): MapId | null {
   return live?.mapId() ?? null;
@@ -489,6 +498,12 @@ function createMenuScene(initialChoice: MapChoice, initialGun: string, initialCa
     ambient.tick(nowSec, renderer.getPixelRatio());
     heroSway?.render(alpha);
     foeSway?.render(alpha);
+    if (preRender) {
+      try { if (!preRender(renderer)) preRender = null; } catch (err) {
+        preRender = null;
+        if (import.meta.env.DEV) console.warn("[gamey] menu pre-render failed", err);
+      }
+    }
     arena.render();
   }
 
