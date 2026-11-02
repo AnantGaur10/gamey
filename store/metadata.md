@@ -2,7 +2,8 @@
 
 Paste-ready text for the portal. Every claim maps to code (sources in
 brackets, delete them when pasting). Covers: `store/covers/` (built by
-`npm run build:covers`). Preview videos are not made yet.
+`npm run build:covers`). Preview videos: `store/videos/preview_1920x1080.mp4` and
+`preview_1080x1620.mp4` (built by `npm run build:previews`).
 
 ## Name
 

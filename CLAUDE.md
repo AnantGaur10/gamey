@@ -96,5 +96,5 @@ AGENTS.md holds the project rules (single SDK build, adapter gating, git workflo
 - Ladder loss = back 5 levels on the endless index (into the previous stage if need be, never below stage 1 level 1; `knockedBack`): the revive card states it, the result card shows KNOCKED BACK TO ... (user 2026-11-02).
 
 ## Known drift / open items
-- Preview videos are not made (covers + metadata: `store/`; `npm run shots` = the photo stage for stills). Hit SFX files still missing (`playSFX` requests `hit-body/hit-head.mp3` only if they ship). Hell beds are silent (wind roar only).
+- Store assets: covers (`npm run build:covers`), preview videos `store/videos/preview_{1920x1080,1080x1620}.mp4` (`npm run build:previews` = `scripts/build-previews.sh`: real-speed gameplay cuts from the raw OBS `.mkv` recordings in `store/videos/`, gitignored; first frame = the cover, no audio, 19.1s), stills via `npm run shots` (the photo stage). Hit SFX files still missing (`playSFX` requests `hit-body/hit-head.mp3` only if they ship). Hell beds are silent (wind roar only).
 - `context/2026-10-01.md` is referenced but missing.

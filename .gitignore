@@ -10,3 +10,6 @@ store/covers/plates/
 
 # User-supplied source audio (~270MB of wav); the encoded mp3s ship from public/assets/audio (npm run build:audio).
 /sounds/
+
+# Raw gameplay recordings (OBS, ~350MB); the cut previews ship from store/videos/preview_*.mp4.
+store/videos/*.mkv
