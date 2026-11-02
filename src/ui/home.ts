@@ -1359,6 +1359,15 @@ function runDuel(
       },
       /** World positions of a duelist's ragdoll parts (corpse-coherence
           checks: spread must stay bounded, never NaN). */
+      /** Anatomy: gap (m) between the two parts at every joint, live pose
+          (src/dev/anatomy.ts). 0 = contiguous. */
+      anatomy: async (side: "player" | "foe") => {
+        const { limbGaps, bendAngles } = await import("../dev/anatomy");
+        const c = side === "player" ? player : foe;
+        (c as unknown as CowboyGlb).solveArm?.(); // the visible arm as drawn this frame
+        const pre = side === "player" ? "H" : "O";
+        return { ...limbGaps(c.group, pre), bend: bendAngles(c.group, pre) };
+      },
       parts: (side: "player" | "foe") => {
         const c = side === "player" ? player : foe;
         const out: Record<string, [number, number, number] | null> = {};

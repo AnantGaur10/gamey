@@ -12,6 +12,7 @@ import { FOE_LOOKS, type FoeLookId } from "../render/foes";
 import { LEVELS } from "../game/levels";
 import { paintGun } from "../render/cowboy";
 import { gaitRig } from "../render/townsfolk";
+import { limbGaps, bendAngles } from "./anatomy";
 
 type Pose = "idle" | "draw" | "victory" | "walk";
 type Who = "hero" | FoeLookId;
@@ -171,3 +172,10 @@ function frame(): void {
 }
 frame();
 void Promise.all(loads).then(() => setTimeout(() => ((window as unknown as { __ready: boolean }).__ready = true), 1500));
+// Anatomy gaps per posed cowboy (src/dev/anatomy.ts): 0 = joint contiguous.
+(window as unknown as { __anatomy: () => unknown }).__anatomy = () =>
+  posed.map((p, i) => {
+    const pre = p.rig.group.getObjectByName("H_Pelvis") ? "H" : "O";
+    p.rig.solveArm?.();
+    return { i, gaps: limbGaps(p.rig.group, pre), bend: bendAngles(p.rig.group, pre) };
+  });

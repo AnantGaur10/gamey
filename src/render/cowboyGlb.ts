@@ -36,6 +36,8 @@ export interface CowboyGlb extends Cowboy {
   sway: SwayNode[];
   /** Measured off this rig's meshes at load (standing). */
   dims: CowboyDims;
+  /** Re-solve the visible gun arm now (it also runs itself before each draw). DEV probes. */
+  solveArm?: () => void;
 }
 
 export interface CowboyDims {
@@ -146,6 +148,96 @@ export function preloadCowboyGlb(url: string): void {
   void loadTemplate(url);
 }
 
+/** The visible gun arm, solved as a human arm (user 2026-11-02: "make sure
+    all limbs are contiguous and correct and follow human anatomy"). Every rig
+    authors the elbow pivot 0.34m from the shoulder at 45-60 deg FORWARD, so
+    with the hand on the holstered grip or out aiming, the forearm folded back
+    against the upper arm (a backwards elbow), and the straight-down upper
+    arm mesh didn't even reach the elbow. The game keeps its pivots (armR,
+    elbowR, the gun, gunTip, holster, aim: all gameplay and clips untouched);
+    only the two meshes are placed, every draw, by a two-bone IK from the
+    shoulder to the grip spot the hand must hold: upper arm shoulder -> elbow,
+    forearm elbow -> hand, the elbow on the human side (down, back, a little
+    out), never hyperextended. Same segment lengths as the rig. */
+function armVisualIk(
+  body: THREE.Object3D, armR: THREE.Object3D, elbowR: THREE.Object3D,
+  sleeve: THREE.Object3D | null, fore: THREE.Object3D | null, gripLocal: THREE.Vector3,
+): (() => void) | null {
+  if (!sleeve || !fore || sleeve.parent !== armR || fore.parent !== elbowR) return null;
+  const L1 = elbowR.position.length(); // shoulder -> elbow
+  const L2 = gripLocal.length(); // elbow -> grip (the hand)
+  const offU = sleeve.position.length(); // mesh centre along each segment
+  const offF = fore.position.length();
+  if (L1 < 1e-3 || L2 < 1e-3) return null;
+  const S = new THREE.Vector3(), W = new THREE.Vector3(), E = new THREE.Vector3(), u = new THREE.Vector3();
+  const fwd = new THREE.Vector3(), up = new THREE.Vector3(), left = new THREE.Vector3(), pole = new THREE.Vector3();
+  const x = new THREE.Vector3(), y = new THREE.Vector3(), z = new THREE.Vector3(), p = new THREE.Vector3();
+  const pos = new THREE.Vector3(), xRef = new THREE.Vector3();
+  const qb = new THREE.Quaternion(), qe = new THREE.Quaternion(), qw = new THREE.Quaternion();
+  const m = new THREE.Matrix4(), inv = new THREE.Matrix4(), one = new THREE.Vector3(1, 1, 1);
+  const place = (o: THREE.Object3D, pos: THREE.Vector3, q: THREE.Quaternion): void => {
+    o.parent!.updateWorldMatrix(true, false);
+    inv.copy(o.parent!.matrixWorld).invert();
+    m.compose(pos, q, one).premultiply(inv);
+    m.decompose(o.position, o.quaternion, o.scale);
+    o.updateMatrixWorld();
+  };
+  /** Basis with +y along `yDir` and x as close to `xRef` as allowed. */
+  const basis = (yDir: THREE.Vector3, xRef: THREE.Vector3, xFallback: THREE.Vector3): THREE.Quaternion => {
+    y.copy(yDir);
+    x.copy(xRef).addScaledVector(y, -xRef.dot(y));
+    if (x.lengthSq() < 1e-6) x.copy(xFallback).addScaledVector(y, -xFallback.dot(y));
+    x.normalize();
+    z.crossVectors(x, y);
+    return qw.setFromRotationMatrix(m.makeBasis(x, y, z));
+  };
+  const solve = (): void => {
+    armR.updateWorldMatrix(true, false);
+    elbowR.updateWorldMatrix(false, false);
+    armR.getWorldPosition(S);
+    W.copy(gripLocal).applyMatrix4(elbowR.matrixWorld);
+    body.getWorldQuaternion(qb);
+    fwd.set(0, 0, 1).applyQuaternion(qb); // the rig faces group +Z
+    up.set(0, 1, 0).applyQuaternion(qb);
+    left.set(1, 0, 0).applyQuaternion(qb); // right = group -X
+    u.subVectors(W, S);
+    const dRaw = u.length();
+    if (dRaw < 1e-5) return;
+    u.divideScalar(dRaw);
+    const d = Math.min(L1 + L2 - 1e-4, Math.max(Math.abs(L1 - L2) + 1e-4, dRaw));
+    const a = (L1 * L1 - L2 * L2 + d * d) / (2 * d);
+    const h = Math.sqrt(Math.max(0, L1 * L1 - a * a));
+    // Elbow side: behind, a touch below and out to the gun side, as a human's.
+    pole.copy(fwd).multiplyScalar(-1).addScaledVector(up, -0.35).addScaledVector(left, -0.4);
+    p.copy(pole).addScaledVector(u, -pole.dot(u));
+    if (p.lengthSq() < 1e-6) p.copy(up).multiplyScalar(-1).addScaledVector(u, up.dot(u)); // -up, off the u line
+    p.normalize();
+    E.copy(S).addScaledVector(u, a).addScaledVector(p, h);
+    // Upper arm: +y back up to the shoulder, x along the body's left (its rest frame).
+    p.subVectors(S, E).normalize();
+    const qU = basis(p, left, fwd).clone();
+    place(sleeve, pos.copy(S).addScaledVector(p, -offU), qU);
+    // Forearm: +y back to the elbow, twist from the gun arm (hand stays on the grip).
+    p.subVectors(E, W).normalize();
+    elbowR.getWorldQuaternion(qe);
+    xRef.set(1, 0, 0).applyQuaternion(qe);
+    const qF = basis(p, xRef, fwd).clone();
+    place(fore, pos.copy(E).addScaledVector(p, -offF), qF);
+  };
+  let frame = -1;
+  const before = (r: THREE.WebGLRenderer): void => {
+    if (r.info.render.frame === frame) return; // once per draw, whichever mesh comes first
+    frame = r.info.render.frame;
+    solve();
+  };
+  for (const o of [sleeve, fore]) {
+    o.frustumCulled = false; // placed after the renderer's cull pass
+    (o as THREE.Mesh).onBeforeRender = before as unknown as THREE.Mesh["onBeforeRender"];
+  }
+  solve();
+  return solve;
+}
+
 export async function loadCowboyGlb(
   url: string,
   prefix: "H" | "O",
@@ -235,21 +327,6 @@ export async function loadCowboyGlb(
     const elbowR = inner.getObjectByName(`${prefix}_elbowR`) as THREE.Group | undefined;
     const gunTip = inner.getObjectByName(`${prefix}_gunTip`);
     if (!armR || !elbowR || !gunTip) return null;
-    // Upper arm aimed at the elbow (user 2026-11-02: "the hand is coming out
-    // of the elbow and not the wrist"). Every rig authors Sleeve_R hanging
-    // straight down from the shoulder while the elbow pivot sits 0.34m from
-    // it at 45-60 deg forward, so the forearm, hand and gun hung from a point
-    // ~0.26m in front of where the upper arm ended. Same length, so turning
-    // the sleeve onto the shoulder->elbow line joins the chain again: shoulder,
-    // upper arm, elbow, forearm, wrist, gun. Visual only: no pivot moves, so
-    // aim, clips, the holster pose and hit volumes are untouched.
-    const sleeveR = inner.getObjectByName(`${prefix}_Sleeve_R`);
-    if (sleeveR && sleeveR.parent === armR && elbowR.position.lengthSq() > 1e-6) {
-      const from = sleeveR.position.lengthSq() > 1e-6 ? sleeveR.position.clone().normalize() : new THREE.Vector3(0, -1, 0);
-      const turn = new THREE.Quaternion().setFromUnitVectors(from, elbowR.position.clone().normalize());
-      sleeveR.position.applyQuaternion(turn);
-      sleeveR.quaternion.premultiply(turn);
-    }
 
     function setGunsDown(): void {
       armR!.rotation.set(0.55, 0, 0); // muzzle toward dirt (standoff pose)
@@ -372,9 +449,13 @@ export async function loadCowboyGlb(
     // makeGunHolster no-ops and the gun stays in hand. The idle clip keys the
     // hand onto the holstered grip, so holster() only moves the gun.
     const gun = byName("Gun");
+    // Visual gun arm (anatomy): see armVisualIk. The grip spot is the gun's
+    // authored in-hand position under the elbow (read before any holster()).
+    const solveArm = armVisualIk(group, armR, elbowR, byName("Sleeve_R"), byName("Fore_R"),
+      gun ? gun.position.clone() : new THREE.Vector3(0, -0.34, -0.06));
     const holsterCtl = makeGunHolster(gun, byName("GunHolster"), elbowR);
     return { group, armR, elbowR, gunTip, parts, joints, setGunsDown, setRaised, setFall, mixer, hasClip, playClip, stopClips, playFrozen, update, sway, dims,
-      gun, holster: holsterCtl.holster, drawStep: holsterCtl.drawStep, gunState: holsterCtl.gunState };
+      gun, holster: holsterCtl.holster, drawStep: holsterCtl.drawStep, gunState: holsterCtl.gunState, solveArm: solveArm ?? undefined };
   } catch (err) {
     // Silent in prod (procedural fallback covers AdBlock/offline/file://);
     // noisy in dev so a broken model/swap is impossible to miss.
