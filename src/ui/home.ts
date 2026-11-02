@@ -1288,6 +1288,7 @@ function runDuel(
       dims: (side: "player" | "foe") => ({ ...dimsOf(side === "player" ? player : foe), capDeg: spreadCapDeg(), glb: "dims" in (side === "player" ? player : foe) }),
       /** Set both duelists' HP (double-KO repro: 1/1 makes any hit lethal). */
       hp: (p: number, f: number) => { playerHP = p; foeHP = f; paintBars(); },
+      ammo: (p: number, f: number) => { ammo = p; foeAmmo = f; paintBars(); },
       /** Revolver state + world position (quick-draw checks). */
       gun: (side: "player" | "foe") => {
         const c = side === "player" ? player : foe;
@@ -2081,7 +2082,7 @@ function runDuel(
     if (foeDead && playerDead && killByPlayer && killByFoe) {
       if (Math.abs(foeDeadAt - playerDeadAt) < 900) {
         roundOver = true;
-        endRound("DOUBLE KO!", "Sudden death: first hit wins.", "draw", true);
+        doubleKo();
         return;
       }
     }
@@ -2091,12 +2092,12 @@ function runDuel(
       if (live && !(foeDead && playerDead)) {
         window.setTimeout(() => { if (!roundOver) maybeEnd(); }, 350);
         // but don't hang forever: resolve ammo-out below anyway
-        if (foeDead && playerDead) { roundOver = true; endRound("DOUBLE KO!", "Sudden death: first hit wins.", "draw", true); return; }
+        if (foeDead && playerDead) { roundOver = true; doubleKo(); return; }
         if (foeDead || playerDead) {
           // give bullets 600ms max, then resolve
           window.setTimeout(() => {
             if (roundOver) return;
-            if (foeHP <= 0 && playerHP <= 0) { roundOver = true; endRound("DOUBLE KO!", "Sudden death: first hit wins.", "draw", true); }
+            if (foeHP <= 0 && playerHP <= 0) { roundOver = true; doubleKo(); }
             else if (foeHP <= 0) { roundOver = true; endFoeDown(); }
             else if (playerHP <= 0) { roundOver = true; endRound("YOU'RE DOWN", "The foe takes it.", "f"); }
           }, 650);
@@ -2111,7 +2112,7 @@ function runDuel(
         }
       }
       roundOver = true;
-      if (foeDead && playerDead) endRound("DOUBLE KO!", "Sudden death: first hit wins.", "draw", true);
+      if (foeDead && playerDead) doubleKo();
       else if (foeDead) endFoeDown();
       else endRound("YOU'RE DOWN", "The foe takes it.", "f");
       return;
@@ -2127,10 +2128,22 @@ function runDuel(
         endRound("NO BLOOD DRAWN", "Sudden death spares you both. Back to the street.", "draw");
         return;
       }
-      if (playerHP === foeHP) endRound("DRAW — REPLAY", "Same HP.", "draw", false);
+      // Deathmatch: dead even with both cylinders empty is the ONE way into
+      // sudden death (user 2026-11-02). Standard mode replays the round.
+      if (playerHP === foeHP && run) endRound("DEAD EVEN", "Same HP, no bullets left. Sudden death: first hit wins.", "draw", true);
+      else if (playerHP === foeHP) endRound("DRAW — REPLAY", "Same HP.", "draw", false);
       else if (playerHP > foeHP) endRound("OUT OF AMMO — YOU TAKE IT", "Higher HP wins.", "p");
       else endRound("OUT OF AMMO — LOST", "Higher HP wins.", "f");
     }
+  }
+
+  /** Both down at once. Standard mode: sudden death. Deathmatch (user
+      2026-11-02: "should go to sudden death if both had the same hp and
+      bullets are zero for both"): no sudden death here, the duel replays at
+      the HP you started it with. */
+  function doubleKo(): void {
+    if (run) endRound("DOUBLE KO!", "Both down. The duel goes again.", "draw", false);
+    else endRound("DOUBLE KO!", "Sudden death: first hit wins.", "draw", true);
   }
 
   /** Player-win cue: the tutorial used to call every kill a headshot. */
@@ -2280,11 +2293,15 @@ function runDuel(
       HP carried, a loss ends the run. */
   function continueRun(r: DeathRun, result: "p" | "f" | "draw"): void {
     if (result === "f") { endRun(r.streak); return; }
+    // Sudden death starts everyone on full HP: the run carries on from the
+    // HP you had going in (r.hp, untouched by the hell round), never a free
+    // refill. A double KO replays at the duel's starting HP (r.hp too).
+    const hpNow = hellRound || playerHP <= 0 ? r.hp : playerHP;
     if (result === "p") {
       r.streak++;
-      r.hp = Math.min(BASE_HP, playerHP + DEATHMATCH_WIN_HEAL);
+      r.hp = Math.min(BASE_HP, hpNow + DEATHMATCH_WIN_HEAL);
     } else {
-      r.hp = Math.max(1, playerHP);
+      r.hp = Math.max(1, hpNow);
     }
     // A drawn duel replays vs the same foe on the same map.
     if (result === "p") r.map = rollMap(adapter);
