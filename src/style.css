@@ -441,6 +441,7 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 .rv-badge .sicon { width: 40px; height: 30px; margin: 0; }
 .rv-title { font-size: 42px; line-height: 1; letter-spacing: 0.08em; color: #ffd678; text-shadow: 0 3px 0 #4a2c10, 0 6px 16px rgba(0, 0, 0, 0.7); }
 .rv-sub { margin-top: 10px; font-size: 17px; }
+.rv-stake { margin-top: 8px; font-size: 14px; letter-spacing: 0.04em; color: #ff9a7a; }
 .rv-meta { margin-top: 6px; font-size: 13px; letter-spacing: 0.04em; opacity: 0.75; }
 .rv-btns { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 10px; margin-top: 18px; }
 .rv-btn {
@@ -504,6 +505,7 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
   font-size: 18px; letter-spacing: 0.12em; color: #2b1a10; background: linear-gradient(180deg, #fff0c0, #d4af37);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5); animation: rsslam 0.55s 0.25s cubic-bezier(0.2, 1.5, 0.4, 1) both;
 }
+.menu.result .rs-new.lost { color: #ffb4a0; border-color: rgba(255, 120, 90, 0.7); background: rgba(90, 20, 10, 0.55); }
 .menu.result .rs-gold {
   display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px 0 8px; border-radius: 20px;
   background: rgba(20, 10, 4, 0.62); border: 1px solid rgba(255, 214, 120, 0.45);

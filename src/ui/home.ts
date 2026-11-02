@@ -15,7 +15,7 @@ import { createRagdoll, bindAccessories, type Ragdoll } from "../render/ragdoll"
 import { DuelMachine, type WoundPose } from "../game/DuelMachine";
 import { bodyDamage, BASE_HP, LIFESTEAL_CAP_PER_HIT, DUEL_RANGE_MIN, DUEL_RANGE_MAX } from "../game/damage";
 import { GUNS, AI_ROSTER, GOLD_WIN_BESTOF, GOLD_WIN_DEATHMATCH, GOLD_LOSS_CONSOLATION, GOLD_KILL_BONUS, reviveDeathPrice } from "../game/economy";
-import { LEVEL_COUNT, playableLevel, levelAi, levelClearGold, ladderPos, ladderLevel } from "../game/levels";
+import { LEVEL_COUNT, playableLevel, levelAi, levelClearGold, ladderPos, ladderLevel, knockedBack } from "../game/levels";
 import { ProjectileSim, testCapsuleHit, predictHit, CAPSULE_FOR_POSE, capsuleMid, DEFAULT_HAT, type BulletState } from "../game/projectiles";
 import { LocalTransport } from "../game/Transport";
 import type { PortalAdapter, Progress } from "../portal/PortalAdapter";
@@ -550,6 +550,8 @@ export interface SeriesState {
   cleared?: boolean;
 }
 
+/** "STAGE 2 · LEVEL 7" for an absolute ladder index. */
+const ladderLabel = (n: number): string => { const p = ladderPos(n); return `STAGE ${p.stage} · LEVEL ${p.idx + 1}`; };
 const titleCase = (t: string): string => t.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
 
 /** Standard Best-of loop entry: full-HP resets, most-rounds-wins. Ladder
@@ -1266,7 +1268,7 @@ function runDuel(
       /** Jump straight into a hell sudden-death round (repro/tests). */
       hell: (d?: number) => { cleanup(); runDuel(root, adapter, mode, audio, series, true, reviveUsed, { run, distM: d }); },
       /** Jump to best-of round i (0 noon, 1 evening, 2 night) at 1-1. */
-      round: (i: number, d?: number, hp?: number) => { cleanup(); runDuel(root, adapter, "standard", audio, { roundIndex: i, pWins: Math.min(Math.ceil(i / 2), 1), fWins: Math.min(Math.floor(i / 2), 1), map: mapId }, false, reviveUsed, { distM: d, startHP: hp }); },
+      round: (i: number, d?: number, hp?: number) => { cleanup(); runDuel(root, adapter, "standard", audio, { roundIndex: i, pWins: Math.min(Math.ceil(i / 2), 1), fWins: Math.min(Math.floor(i / 2), 1), map: mapId, level: series?.level }, false, reviveUsed, { distM: d, startHP: hp }); },
       /** Jump to a map at round i (hell = its hell round), optional distance. */
       map: (id: MapId, i = 0, hell = false, d?: number) => { cleanup(); runDuel(root, adapter, "standard", audio, { roundIndex: i, pWins: Math.min(Math.ceil(i / 2), 1), fWins: Math.min(Math.floor(i / 2), 1), map: id }, hell, reviveUsed, { distM: d }); },
       /** Ladder level n (1-based) from its first round (its foe + AI). */
@@ -2330,6 +2332,15 @@ function runDuel(
   }
 
   function endSeries(won: boolean): void {
+    // Ladder loss (user 2026-11-02): back LEVEL_PENALTY levels (into the
+    // previous stage if need be, never below stage 1 level 1), saved now.
+    let fellTo: number | null = null;
+    if (!won && series?.level !== undefined) {
+      fellTo = knockedBack(series.level);
+      const q = adapter.loadProgress();
+      q.level = fellTo;
+      adapter.saveProgress(q);
+    }
     const pips = (series?.history ?? [])
       .map((r, i) => `<i class="pip ${r === "p" ? "w" : "l"}" title="Round ${i + 1}">${r === "p" ? "W" : "L"}</i>`).join("");
     // Ladder card: the level in the kicker, the foe by name, NEXT on a win
@@ -2339,7 +2350,9 @@ function runDuel(
     const last = lpos !== null && lpos.idx === LEVEL_COUNT - 1;
     const next = lv !== undefined ? ladderLevel(lv + 1) : null;
     const npos = lv !== undefined ? ladderPos(lv + 1) : null;
-    const badge = !series?.cleared || !npos ? "" : last ? `<div class="rs-new">STAGE ${npos.stage} UNLOCKED</div>` : `<div class="rs-new">LEVEL ${npos.idx + 1} UNLOCKED</div>`;
+    const badge = fellTo !== null
+      ? `<div class="rs-new lost">KNOCKED BACK TO ${ladderLabel(fellTo)}</div>`
+      : !series?.cleared || !npos ? "" : last ? `<div class="rs-new">STAGE ${npos.stage} UNLOCKED</div>` : `<div class="rs-new">LEVEL ${npos.idx + 1} UNLOCKED</div>`;
     const s = resultCard({
       won,
       kicker: ladder ? `STAGE ${lpos!.stage} · LEVEL ${lpos!.idx + 1} OF ${LEVEL_COUNT} · ${MAPS[mapId].name}` : `BEST OF ${BEST_OF} · ${MAPS[mapId].name}`,
@@ -2357,10 +2370,10 @@ function runDuel(
           <div class="rs-side foe"><span>${ladder ? ladder.name : "FOE"}</span><b>${series?.fWins ?? 0}</b></div>
         </div>${pips ? `<div class="rs-pips">${pips}</div>` : ""}${badge}`,
       gold: series?.gold ?? 0,
-      again: won && npos ? (last ? `NEXT: STAGE ${npos.stage}` : `NEXT: LEVEL ${npos.idx + 1}`) : "REMATCH",
+      again: won && npos ? (last ? `NEXT: STAGE ${npos.stage}` : `NEXT: LEVEL ${npos.idx + 1}`) : fellTo !== null ? `PLAY: ${ladderLabel(fellTo)}` : "REMATCH",
     });
     s.querySelector("[data-b=again]")!.addEventListener("click", () =>
-      runSeries(root, adapter, mode, audio, won && lv !== undefined ? lv + 1 : lv));
+      runSeries(root, adapter, mode, audio, won && lv !== undefined ? lv + 1 : fellTo ?? lv));
   }
 
   function offerRevive(onAccept: () => void, onDecline: () => void): void {
@@ -2380,6 +2393,7 @@ function runDuel(
         <span class="rv-badge">${AID_KIT_ICON}</span>
         <div class="rv-title">REVIVE?</div>
         <div class="rv-sub">Get back up with 1 HP: same round, fresh aim.</div>
+        ${series?.level !== undefined ? `<div class="rv-stake">Stay down and you fall back to ${ladderLabel(knockedBack(series.level))}</div>` : ""}
         <div class="rv-meta">${hasToken ? "Uses your revive token · once per game" : canBuy ? `No token · emergency price ${price}g · you have ${p.gold}g` : "No token"}</div>
         <div class="rv-btns">${yes}${adapter.adsEnabled ? `<button class="rv-btn" data-r="ad">WATCH AD</button>` : ""}<button class="rv-btn" data-r="no">STAY DOWN</button></div>
         <div class="rv-timer"><i style="animation-duration:${REVIVE_WAIT_MS}ms"></i></div>

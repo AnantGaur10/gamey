@@ -44,7 +44,41 @@ test('no revive on the first lost round, revive on the match-deciding one', asyn
     await expect(page.locator('[data-r=no]')).toHaveCount(0);
   }
   // Round 3 at 1-1 (fWins 1): this death would lose the match.
-  if (await dieInRound(page, 2)) {
+  const died = await dieInRound(page, 2);
+  console.log(`[revive-spec] died in the deciding round: ${died}`);
+  if (died) {
     await expect(page.locator('[data-r=no]')).toBeVisible({ timeout: 8000 });
+    // The stakes are on the card, and STAY DOWN costs 5 levels (floored at stage 1 level 1).
+    await expect(page.locator('.rv-stake')).toContainText('STAGE 1 · LEVEL 1');
+    await page.click('[data-r=no]');
+    await expect(page.locator('.rs-new.lost')).toContainText('KNOCKED BACK TO STAGE 1 · LEVEL 1', { timeout: 15000 });
+  }
+});
+
+test('a ladder loss at stage 2 level 3 falls back 5 levels to stage 1 level 8', async ({ page }) => {
+  await page.goto('/basic.html?nosdk=1');
+  await page.waitForSelector('.skip button, .menu.home', { timeout: 60000 });
+  if (await page.locator('.skip button').isVisible()) {
+    await page.click('.skip button');
+    await page.waitForSelector('.nameprompt, .menu.home');
+    if (await page.locator('.nameprompt').isVisible()) await page.click('.nameprompt [data-n=skip]');
+  }
+  await page.waitForSelector('.menu.home');
+  await page.evaluate(() => {
+    const p = JSON.parse(localStorage.getItem('gamey.v1') ?? '{}');
+    p.level = 12; // stage 2 level 3
+    p.gold = 0; p.reviveToken = 0; // nothing to revive with: the loss is final at once
+    localStorage.setItem('gamey.v1', JSON.stringify(p));
+  });
+  await page.reload();
+  await page.waitForSelector('.menu.home', { timeout: 60000 });
+  await expect(page.locator('button[data-m="standard"] small')).toContainText('Stage 2 · Level 3');
+  await page.click('button[data-m="standard"]');
+  await page.waitForSelector('.readyzone', { timeout: 60000 });
+  const died = await dieInRound(page, 2);
+  console.log(`[revive-spec] died at stage 2 level 3: ${died}`);
+  if (died) {
+    await expect(page.locator('.rs-new.lost')).toContainText('STAGE 1 · LEVEL 8', { timeout: 15000 });
+    await expect(page.locator('[data-b=again]')).toContainText('PLAY: STAGE 1 · LEVEL 8');
   }
 });

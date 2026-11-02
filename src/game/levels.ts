@@ -98,3 +98,11 @@ export function levelClearGold(level: number): number {
   const { stage, idx } = ladderPos(level);
   return 20 + 5 * (idx + 1) + 10 * (stage - 1);
 }
+
+/** Losing a ladder match (user 2026-11-02: the revive has to save something)
+    knocks you back LEVEL_PENALTY levels on the endless index: it can cross
+    into the previous stage, never below stage 1 level 1. */
+export const LEVEL_PENALTY = 5;
+export function knockedBack(level: number): number {
+  return Math.max(0, playableLevel(level) - LEVEL_PENALTY);
+}
