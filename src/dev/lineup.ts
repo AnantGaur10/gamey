@@ -66,6 +66,12 @@ if (mapId === "street") {
   }));
 }
 
+// No duel furniture in a photo: the arena's gold marker ring under the foe.
+scene.traverse((o) => {
+  const m = o as THREE.Mesh;
+  if (m.isMesh && m.geometry?.type === "RingGeometry") m.visible = false;
+});
+
 // The row stands where the foe would, facing the player's side.
 const { player: pPos, foe: fPos } = stagePositions(DIST);
 const row = new THREE.Group();
