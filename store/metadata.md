@@ -35,17 +35,21 @@ and fire the moment the cue says DRAW!
 - **Noon, dusk, night.** Each decided round of a best-of-3 gets darker. At night
   your rival vanishes into the dark and only his muzzle flash gives him away.
   [`timeOfDayForRound`, `src/render/arena.ts`]
-- **Ten gunslingers.** Climb a ladder of ten named rivals, from Greenhorn Gus
-  to The Widow, each one faster and deadlier than the last.
-  [`src/game/levels.ts`]
+- **Ten gunslingers, endless stages.** Climb a ladder of ten named rivals,
+  from Greenhorn Gus to The Widow, each one faster and deadlier than the
+  last. Beat The Widow and Stage 2 begins: all ten ride back a little
+  quicker and steadier, and it never stops. [`src/game/levels.ts`]
 - **Sudden death.** Both duelists down at once? One more round, full
   cylinders, and the first hit wins. [`context/2026-10-05.md` §12]
 - **Deathmatch.** Duel after duel on one life, and your health carries over.
   How many can you outdraw? [`runDeathmatch`]
 - **Four places to fight:** Main Street, the Saloon, The Falls and
-  Telegraph Row, at random or your pick. [`src/render/maps.ts`]
-- **Armory.** Earn gold with every win and spend it on new revolvers (a
-  lifesteal gun that heals on every hit, a gold gun that pays more) and a
+  Telegraph Row, at random or your pick. Townsfolk stroll the boardwalks
+  until the first shot, the saloon has its piano and the falls their river.
+  [`src/render/maps.ts`, `src/render/townsfolk.ts`, `src/audio/beds.ts`]
+- **Armory.** Earn gold with every win and spend it on new revolvers (turn
+  each one in your hands: a lifesteal gun that heals on every hit, a gold
+  gun that pays more) and a
   revive token. [`src/game/economy.ts`, shop in `home.ts`]
 
 A short tutorial teaches the draw on your first visit. You can replay it any
@@ -58,12 +62,14 @@ Desktop:
 - Space / Enter: stop the Focus marker on the gold arc
 - Mouse: aim
 - Left click: fire
+- P: pause (volume, leave the duel)
 
 Touch (landscape, two thumbs):
 - Left thumb: hold the HOLSTER box to start the countdown (lifting it restarts the countdown)
 - Right thumb: tap the pad to stop the Focus marker on the gold arc
 - Left thumb: drag to aim after DRAW!
 - Right thumb: press SHOOT to fire
+- Pause button (top left): pause
 
 ## Notes for the portal form
 
@@ -73,5 +79,9 @@ Touch (landscape, two thumbs):
 - No ads in Basic Launch (`ADS_ENABLED=false`).
 - CrazyGames muting audio through SDK: yes.
 - English only.
+- Audio credits (also in SETTINGS and `public/licenses/AUDIO-CREDITS.txt`):
+  gunshot by Michel Baradari (CC-BY 3.0); music "Lasso Lady" by
+  congusbongus and "Miniature Saloon" by Zane Little Music, park ambience by
+  Thimras (all CC0, OpenGameArt).
 - Orientation: landscape (plays on desktop and mobile; mobile viewport
   tested down to 800x450).

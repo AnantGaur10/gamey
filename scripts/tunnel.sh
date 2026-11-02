@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Phone testing over a Cloudflare quick tunnel (DEV only, never the build).
-#   npm run tunnel            # starts the dev server if needed, then the tunnel
+# Phone testing (DEV only, never the build): host the dev server on this
+# machine's IPv4 LAN address (wlan* first, else the default-route interface;
+# on WSL2 that's eth0, 172.x) so a Cloudflare tunnel run from Windows
+# PowerShell can reach it. No cloudflared here: the tunnel is the user's,
+# from PowerShell (user 2026-11-02).
+#   npm run tunnel                 # dev server on <172.x>:5174 + the PowerShell line to run
 #   IP=172.18.0.5 npm run tunnel   # force the address
-# The tunnel points at this machine's IPv4 LAN address (wlan* first, else the
-# default-route interface; on WSL2 that's eth0, 172.x), not localhost.
 # vite.config.ts allows every *.trycloudflare.com host, so a new tunnel URL
-# needs no edit. Ctrl+C stops the tunnel (and the dev server it started).
+# needs no edit.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PORT=5174
@@ -29,26 +31,14 @@ pick_ip() {
 
 IP="${IP:-$(pick_ip)}"
 [ -n "$IP" ] || { echo "tunnel: no IPv4 address found (set IP=...)" >&2; exit 1; }
-command -v cloudflared >/dev/null || { echo "tunnel: cloudflared not on PATH (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)" >&2; exit 1; }
 
-DEV_PID=""
-cleanup() { [ -n "$DEV_PID" ] && kill "$DEV_PID" 2>/dev/null || true; }
-trap cleanup EXIT INT TERM
-
-if ! curl -s -o /dev/null "http://$IP:$PORT/basic.html"; then
-  echo "tunnel: starting the dev server on 0.0.0.0:$PORT"
-  npm run dev >/tmp/gamey-dev.log 2>&1 &
-  DEV_PID=$!
-  for _ in $(seq 1 60); do curl -s -o /dev/null "http://$IP:$PORT/basic.html" && break; sleep 0.5; done
-  curl -s -o /dev/null "http://$IP:$PORT/basic.html" || { echo "tunnel: dev server did not come up (see /tmp/gamey-dev.log)" >&2; exit 1; }
+echo
+echo "  Dev server: http://$IP:$PORT/basic.html"
+echo "  In Windows PowerShell:  cloudflared tunnel --url http://$IP:$PORT"
+echo "  Then open <the trycloudflare URL>/basic.html on the phone."
+echo
+if curl -s -o /dev/null "http://$IP:$PORT/basic.html"; then
+  echo "  (a dev server already answers there: leaving it running)"
+  exit 0
 fi
-
-echo "tunnel: http://$IP:$PORT -> Cloudflare (the public URL prints below; open <url>/basic.html)"
-cloudflared tunnel --no-autoupdate --url "http://$IP:$PORT" 2>&1 | while IFS= read -r line; do
-  if [[ "$line" =~ (https://[a-z0-9-]+\.trycloudflare\.com) ]]; then
-    echo
-    echo "  PLAY ON YOUR PHONE: ${BASH_REMATCH[1]}/basic.html"
-    echo
-  fi
-  case "$line" in *ERR*|*error*) echo "$line" ;; esac
-done
+exec npx vite --config vite.config.ts --host "$IP" --port "$PORT" --strictPort
