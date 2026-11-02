@@ -235,6 +235,21 @@ export async function loadCowboyGlb(
     const elbowR = inner.getObjectByName(`${prefix}_elbowR`) as THREE.Group | undefined;
     const gunTip = inner.getObjectByName(`${prefix}_gunTip`);
     if (!armR || !elbowR || !gunTip) return null;
+    // Upper arm aimed at the elbow (user 2026-11-02: "the hand is coming out
+    // of the elbow and not the wrist"). Every rig authors Sleeve_R hanging
+    // straight down from the shoulder while the elbow pivot sits 0.34m from
+    // it at 45-60 deg forward, so the forearm, hand and gun hung from a point
+    // ~0.26m in front of where the upper arm ended. Same length, so turning
+    // the sleeve onto the shoulder->elbow line joins the chain again: shoulder,
+    // upper arm, elbow, forearm, wrist, gun. Visual only: no pivot moves, so
+    // aim, clips, the holster pose and hit volumes are untouched.
+    const sleeveR = inner.getObjectByName(`${prefix}_Sleeve_R`);
+    if (sleeveR && sleeveR.parent === armR && elbowR.position.lengthSq() > 1e-6) {
+      const from = sleeveR.position.lengthSq() > 1e-6 ? sleeveR.position.clone().normalize() : new THREE.Vector3(0, -1, 0);
+      const turn = new THREE.Quaternion().setFromUnitVectors(from, elbowR.position.clone().normalize());
+      sleeveR.position.applyQuaternion(turn);
+      sleeveR.quaternion.premultiply(turn);
+    }
 
     function setGunsDown(): void {
       armR!.rotation.set(0.55, 0, 0); // muzzle toward dirt (standoff pose)
