@@ -80,7 +80,7 @@ row.position.copy(fPos);
 faceToward(row, fPos, pPos);
 scene.add(row);
 
-interface Posed { rig: CowboyGlb; label: HTMLElement | null; walk: ((p: number, a: number) => number) | null; phase: number }
+interface Posed { rig: CowboyGlb; label: HTMLElement | null; walk: ((p: number, a: number) => number) | null; phase: number; slot: number }
 const posed: Posed[] = [];
 const feet = new THREE.Vector3();
 who.forEach((w, i) => {
@@ -113,23 +113,40 @@ who.forEach((w, i) => {
     rig.group.updateWorldMatrix(true, false);
     rig.group.getWorldPosition(feet);
     shadow.place(feet, 1.9, false);
-    posed.push({ rig, label, walk, phase: 0.6 + i * 1.3 });
+    posed.push({ rig, label, walk, phase: 0.6 + i * 1.3, slot: i });
   }));
 });
 
-/** Gun drawn, muzzle at the lens: the shoulder angle (whatever sign the rig's
-    frame gives it) that brings the gun tip nearest the camera, elbow straight. */
+/** Gun drawn, barrel at the lens: the shoulder + elbow angles (whatever sign
+    the rig's frame gives them) that point the barrel (grip -> muzzle) most
+    squarely at the camera, held a little out from the body. The visible arm
+    follows through the game's own IK (cowboyGlb armVisualIk). */
 function aimAtCamera(rig: CowboyGlb): void {
-  const tip = new THREE.Vector3();
-  let best = 0, bestD = Infinity;
-  rig.elbowR.rotation.x = 0;
-  for (let a = -2; a <= 2; a += 0.02) {
-    rig.armR.rotation.x = a;
-    rig.group.updateWorldMatrix(true, true);
-    const d = rig.gunTip.getWorldPosition(tip).distanceTo(camera.position);
-    if (d < bestD) { bestD = d; best = a; }
-  }
-  rig.armR.rotation.x = best;
+  const tip = new THREE.Vector3(), grip = new THREE.Vector3(), want = new THREE.Vector3(), dir = new THREE.Vector3();
+  let best = [0, 0, 0], bestScore = Infinity;
+  const grid = (a0: number, a1: number, e0: number, e1: number, y0: number, y1: number, step: number, ystep: number) => {
+    for (let yw = y0; yw <= y1 + 1e-9; yw += ystep) {
+      for (let a = a0; a <= a1; a += step) {
+        for (let e = e0; e <= e1; e += step) {
+          rig.armR.rotation.set(a, yw, 0);
+          rig.elbowR.rotation.x = e;
+          rig.group.updateWorldMatrix(true, true);
+          rig.gunTip.getWorldPosition(tip);
+          (rig.gun ?? rig.gunTip).getWorldPosition(grip);
+          dir.subVectors(tip, grip).normalize();
+          want.subVectors(camera.position, tip).normalize();
+          // Barrel square to the lens first; then a muzzle well out in front.
+          const score = (1 - dir.dot(want)) + 0.02 * tip.distanceTo(camera.position);
+          if (score < bestScore) { bestScore = score; best = [a, e, yw]; }
+        }
+      }
+    }
+  };
+  // The duel aims across with armR.rotation.y too: search pitch, elbow, yaw.
+  grid(-2, 2, -1.6, 1.6, -0.8, 0.8, 0.1, 0.2);
+  grid(best[0] - 0.1, best[0] + 0.1, best[1] - 0.1, best[1] + 0.1, best[2] - 0.2, best[2] + 0.2, 0.02, 0.05);
+  rig.armR.rotation.set(best[0], best[2], 0);
+  rig.elbowR.rotation.x = best[1];
 }
 
 // Camera in lineup space (origin = the row's centre on the ground).
@@ -165,7 +182,7 @@ function frame(): void {
       head.y = 0.05;
       head.project(camera);
       p.label.style.left = `${((head.x + 1) / 2) * innerWidth}px`;
-      p.label.style.top = `${((1 - head.y) / 2) * innerHeight + 4}px`;
+      p.label.style.top = `${((1 - head.y) / 2) * innerHeight + 4 + (p.slot % 2) * 18}px`; // staggered: long names never overlap
     }
   }
   arena.render();
