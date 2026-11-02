@@ -1,0 +1,37 @@
+<!doctype html>
+<!--
+  Cowboy lineup for preview / store photos (DEV only, never in the build:
+  vite builds basic.html alone). scripts/shots.mjs drives it headless; also
+  handy by hand on the dev server:
+    /tools/lineup.html?map=town&tod=0&who=all&pose=mixed&labels=1
+  Query (all optional):
+    map    street | saloon | falls | town | none        (default town)
+    tod    0 noon | 1 dusk | 2 night | hell             (default 0)
+    who    all | ladder | hero,outlaw,widow,...         (default all: hero + the ten ladder foes)
+    pose   idle | draw | aim | victory | walk | mixed   (default mixed)
+    gun    default | lifesteal | gold                   (the hero's revolver finish)
+    gap    metres between cowboys                       (default 1.15)
+    cam / look   x,y,z in LINEUP space: origin = the row's centre on the
+                 ground, x = along the row (right), y = up, z = toward the camera
+                 (default cam 0,1.5,<fits the row> look 0,1.05,0)
+    fov    vertical degrees                             (default 40)
+    labels 1 = each cowboy's name under him
+  window.__ready is set once every GLB is in and the poses have settled.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Lineup</title>
+    <link rel="preload" href="/src/assets/rye-latin.woff" as="font" type="font/woff" crossorigin />
+    <link rel="stylesheet" href="/src/style.css" />
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+      .lbl { position: absolute; z-index: 30; transform: translate(-50%, 0); font-family: "Rye", Georgia, serif; font-size: 13px;
+             letter-spacing: 0.06em; color: #ffe9bd; text-shadow: 0 1px 2px #000, 0 0 6px #000; white-space: nowrap; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/dev/lineup.ts"></script>
+  </body>
+</html>

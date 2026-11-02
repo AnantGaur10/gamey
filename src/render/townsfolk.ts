@@ -12,6 +12,7 @@
 // (x, y, z) is the local (x, z, -y).
 import * as THREE from "three";
 import { loadCowboyGlb, type CowboyGlb } from "./cowboyGlb";
+import type { Cowboy } from "./cowboy";
 import { FOE_LOOKS, type FoeLookId } from "./foes";
 import type { MapId } from "./maps";
 
@@ -90,10 +91,65 @@ interface Walker {
   yaw: number;
   gone: boolean;
   lastCos: number;
-  base: Map<THREE.Object3D, THREE.Euler>;
-  cuffRel: THREE.Vector3 | null;
-  j: Record<"legL" | "legR" | "kneeL" | "kneeR" | "sleeve" | "cuff", THREE.Object3D | null>;
+  pose: (phase: number, amp: number) => number;
 }
+
+/** The walk cycle on a cowboy rig, shared with the DEV lineup
+    (tools/lineup.html), on the rig's own wound-pose joints (`Cowboy.joints`):
+    thighs swing about the HIP (the GLB legs pivot mid-thigh, so they are
+    shifted by `hipLift` as they turn), the swinging leg's knee folds, the
+    left arm counters the left leg about its shoulder. Returns the pose
+    function (phase in radians, amp ~0.4 walk / 0.6 hurry; amp 0 = standing);
+    it returns how far the body must drop so the stance foot stays on the
+    ground (a swung leg lifts the hip by its length x (1 - cos angle)): lowest
+    at full stride, highest over the planted foot, like a real walk. */
+export function gaitRig(rig: Cowboy): (phase: number, amp: number) => number {
+  const jt = rig.joints;
+  const sg = jt.sign; // +1 / -1: the rig's x-rotation convention (+ = top toward the facing)
+  const h = jt.hipLift;
+  const base = new Map<THREE.Object3D, { rot: THREE.Euler; pos: THREE.Vector3 }>();
+  const keep = (o: THREE.Object3D | null | undefined) => { if (o && !base.has(o)) base.set(o, { rot: o.rotation.clone(), pos: o.position.clone() }); };
+  [jt.thighL, jt.thighR, jt.kneeL, jt.kneeR, ...(jt.armL?.nodes ?? [])].forEach(keep);
+  const v = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  /** Thigh about the hip: + swings the foot forward. */
+  const thigh = (o: THREE.Object3D | null, a: number): void => {
+    const b = o && base.get(o);
+    if (!b) return;
+    const x = -sg * a;
+    o!.rotation.set(b.rot.x + x, b.rot.y, b.rot.z);
+    // The node turns about its own origin, hipLift below the hip: move it so
+    // the turn is about the hip instead.
+    v.set(0, -h, 0).applyAxisAngle(_X, x);
+    o!.position.set(b.pos.x, b.pos.y + h + v.y, b.pos.z + v.z);
+  };
+  /** Knee fold: + takes the foot back. */
+  const knee = (o: THREE.Object3D | null, a: number): void => {
+    const b = o && base.get(o);
+    if (b) o!.rotation.set(b.rot.x + sg * a, b.rot.y, b.rot.z);
+  };
+  const armL = jt.armL;
+  return (phase, amp) => {
+    const sn = Math.sin(phase), cs = Math.cos(phase);
+    thigh(jt.thighL, amp * sn);
+    thigh(jt.thighR, -amp * sn);
+    knee(jt.kneeL, 1.3 * amp * Math.max(0, cs));
+    knee(jt.kneeR, 1.3 * amp * Math.max(0, -cs));
+    if (armL) {
+      // Every left-arm node turns together about the shoulder pivot.
+      q.setFromAxisAngle(_X, sg * 0.6 * amp * sn);
+      for (const o of armL.nodes) {
+        const b = base.get(o);
+        if (!b) continue;
+        o.position.copy(b.pos).sub(armL.pivot).applyQuaternion(q).add(armL.pivot);
+        o.quaternion.setFromEuler(b.rot).premultiply(q);
+      }
+    }
+    return LEG_LEN * (1 - Math.cos(amp * sn));
+  };
+}
+/** Hip to sole of the outfit rigs (pelvis node at 0.95m). */
+const LEG_LEN = 0.9;
 
 export function folkCount(map: MapId, stage: number, hell: boolean, lowGfx: boolean, lowMemory: boolean, saveData: boolean): number {
   const f = FOLK[map];
@@ -135,14 +191,10 @@ export function createTownsfolk(opts: {
       rig.holster?.();
       if (rig.hasClip("idle")) rig.playClip("idle", true); // hand on the holstered grip
       const g = rig.group;
-      const find = (n: string) => g.getObjectByName(`O_${n}`) ?? null;
-      const j = { legL: find("Leg_L"), legR: find("Leg_R"), kneeL: find("Knee_L"), kneeR: find("Knee_R"), sleeve: find("Sleeve_L"), cuff: find("Cuff_L") };
-      const baseRot = new Map<THREE.Object3D, THREE.Euler>();
-      for (const o of Object.values(j)) if (o) baseRot.set(o, o.rotation.clone());
       const w: Walker = {
         rig, lane, s: Math.random(), dir: Math.random() < 0.5 ? 1 : -1, side: (Math.random() - 0.5) * 0.2,
         pause: Math.random() < 0.3 ? Math.random() * 2 : 0, phase: Math.random() * 6, amp: 0, yaw: 0, gone: false, lastCos: 1,
-        base: baseRot, cuffRel: j.sleeve && j.cuff ? j.cuff.position.clone().sub(j.sleeve.position) : null, j,
+        pose: gaitRig(rig),
       };
       if (hurrying) { w.gone = true; return; } // shots already fired: nobody strolls in
       w.yaw = laneYaw(w);
@@ -170,12 +222,6 @@ export function createTownsfolk(opts: {
     g.position.set(x, def!.height(x, y) + bob, -y);
     g.rotation.y = w.yaw;
   }
-  const turn = (o: THREE.Object3D | null, w: Walker, dx: number): void => {
-    if (!o) return;
-    const b = w.base.get(o);
-    if (b) o.rotation.set(b.x + dx, b.y, b.z);
-  };
-
   function tick(dt: number): void {
     if (!alive) return;
     for (const w of walkers) {
@@ -209,18 +255,9 @@ export function createTownsfolk(opts: {
       const ampTarget = moving ? (hurrying ? 0.6 : 0.4) : 0;
       w.amp += (ampTarget - w.amp) * Math.min(1, dt * 6);
       if (moving) w.phase += (dt * Math.PI * speed) / STEP_LEN;
-      const sn = Math.sin(w.phase), cs = Math.cos(w.phase);
-      turn(w.j.legL, w, w.amp * sn);
-      turn(w.j.legR, w, -w.amp * sn);
-      turn(w.j.kneeL, w, -1.3 * w.amp * Math.max(0, cs));
-      turn(w.j.kneeR, w, -1.3 * w.amp * Math.max(0, -cs));
-      const arm = -0.6 * w.amp * sn;
-      turn(w.j.sleeve, w, arm);
-      if (w.j.cuff && w.j.sleeve && w.cuffRel) {
-        turn(w.j.cuff, w, arm);
-        w.j.cuff.position.copy(w.j.sleeve.position).add(tmp.copy(w.cuffRel).applyAxisAngle(_X, arm));
-      }
-      place(w, w.amp * 0.06 * (Math.abs(cs) - 0.5));
+      const cs = Math.cos(w.phase);
+      const drop = w.pose(w.phase, w.amp);
+      place(w, -drop);
       w.rig.update(dt);
       // A heel strikes each time the stride turns (cos crosses zero).
       if (moving && w.amp > 0.15 && Math.sign(cs) !== Math.sign(w.lastCos)) {
