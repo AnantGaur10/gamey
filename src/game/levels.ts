@@ -39,8 +39,8 @@ export const LEVELS: readonly Level[] = [
   { name: "EL VERDE", tagline: "Two bandoliers, never a missed payday.", foe: "bandido", reactionBaseMs: 385, accuracyMult: 1.02, focusQuality: 0.49 },
   { name: "CALAMITY KATE", tagline: "Rode with the cavalry. Draws like it.", foe: "kate", reactionBaseMs: 351, accuracyMult: 0.91, focusQuality: 0.56 },
   { name: "THE PALE RIDER", tagline: "Nobody has seen his face. Nobody alive.", foe: "ghost", reactionBaseMs: 319, accuracyMult: 0.82, focusQuality: 0.63 },
-  { name: "RUBY ROSE", tagline: "Deals cards with one hand. Shoots with the other.", foe: "ruby", reactionBaseMs: 289, accuracyMult: 0.74, focusQuality: 0.7 },
-  { name: "GENTLEMAN JACK", tagline: "Never draws first. Never needs to.", foe: "dandy", reactionBaseMs: 262, accuracyMult: 0.66, focusQuality: 0.77 },
+  { name: "RUBY CASSIDY", tagline: "Deals cards with one hand. Shoots with the other.", foe: "ruby", reactionBaseMs: 289, accuracyMult: 0.74, focusQuality: 0.7 },
+  { name: "GENTLEMAN GUNSLINGER", tagline: "Never draws first. Never needs to.", foe: "dandy", reactionBaseMs: 262, accuracyMult: 0.66, focusQuality: 0.77 },
   { name: "MARSHAL COLE", tagline: "Wore the star. Then sold it.", foe: "marshal", reactionBaseMs: 236, accuracyMult: 0.59, focusQuality: 0.84 },
   { name: "THE WIDOW", tagline: "Every man she buried drew first.", foe: "widow", reactionBaseMs: 212, accuracyMult: 0.53, focusQuality: 0.9 },
 ];
