@@ -51,7 +51,7 @@ const DRAW_TICKS = 10; // 0.167s at 60Hz: no shot before the gun clears the hols
 let lastPointer: { x: number; y: number } | null = null;
 
 // Shop prices (proposed v1 — user approval needed before locking as final).
-export const SHOP_PRICES = { lifesteal: 100, gold: 120, revive: 50 };
+export const SHOP_PRICES = { lifesteal: 1500, gold: 1500, revive: 500 }; // user 2026-11-02 (was 100 / 120 / 50)
 
 function el(html: string): HTMLElement {
   const d = document.createElement("div");
@@ -436,7 +436,7 @@ const AID_KIT_ICON = `<svg class="sicon" viewBox="0 0 48 36" aria-hidden="true">
 const SHOP_GUNS: Array<{ id: "default" | "lifesteal" | "gold"; name: string; perk: string }> = [
   { id: "default", name: "DAMAGE", perk: "Hits hardest, fires fastest." },
   { id: "lifesteal", name: "LIFESTEAL", perk: `Every body hit heals ${GUNS.lifesteal.extraValue * 100}% of the damage (max ${LIFESTEAL_CAP_PER_HIT}).` },
-  { id: "gold", name: "GOLD", perk: `+${Math.ceil(GOLD_KILL_BONUS * GUNS.gold.extraValue)} gold for every round you win.` },
+  { id: "gold", name: "GOLD", perk: `+${GUNS.gold.extraValue} gold for every round you win.` },
 ];
 const CHECK_ICON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
@@ -2148,7 +2148,7 @@ function runDuel(
     const won = result === "p";
     if (won) {
       prog.gold += (mode === "deathmatch" ? GOLD_WIN_DEATHMATCH : GOLD_WIN_BESTOF) + (killByPlayer ? GOLD_KILL_BONUS : 0);
-      if (gun.extra === "gold") prog.gold += Math.ceil(GOLD_KILL_BONUS * gun.extraValue);
+      if (gun.extra === "gold") prog.gold += gun.extraValue; // flat coins per won round (user 2026-11-02: 10)
       if (run) prog.bestStreak = Math.max(prog.bestStreak, run.streak + 1);
       else prog.bestBestOf = Math.max(prog.bestBestOf, (series?.pWins ?? 0) + 1);
     } else if (result === "f") {

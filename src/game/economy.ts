@@ -14,7 +14,7 @@ export interface GunDef {
       SHORTER cooldown (descending with damage). Default fires fastest. */
   cooldownMs: number;
   extra: ExtraKind;
-  extraValue: number; // lifesteal fraction (0.2) or gold bonus fraction (0.4)
+  extraValue: number; // lifesteal fraction (0.2) or gold coins per won round (10)
   /** Recoil 0..1 (user 2026-11-02: DAMAGE kicks hardest, then LIFESTEAL,
       then GOLD): scales the shot's crosshair kick (1 = the locked x1.5,
       DuelMachine.applyShotKick) and the visible arm / camera kick. */
@@ -52,7 +52,7 @@ export const GUNS: Record<string, GunDef> = {
     focusPerTapDeg: 0.3,
     cooldownMs: 650,
     extra: "gold",
-    extraValue: 0.4,
+    extraValue: 10, // +10 gold per round won (user 2026-11-02; was ceil(5 x 0.4) = 2)
     recoil: 0.5,
   },
 };

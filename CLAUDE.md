@@ -90,7 +90,8 @@ AGENTS.md holds the project rules (single SDK build, adapter gating, git workflo
 - A fresh profile goes tutorial -> SKIP -> `.nameprompt` (guests) -> home: test helpers click `.skip button` then `.nameprompt [data-n=skip]`.
 - HUD is fixed px. Tests assert DOM selectors (`.cue`, `.hp.you i`, `.chamber.live`, `.crosshair` `--gap`, `.qte .qtrack/.qfill/.qres`) and aim through `__gamey.aimAt('foe')` (the foe is NOT at screen centre) and the cue words `HOLSTER UP` / `FOCUS` / `DRAW`, so HUD refactors break them. `fitCue()` shrinks the cue's font to the gap between the HP bars (never change the words to fit). Tests time QTE presses through the DEV `__gamey.qte()` probe (`qteHits()` helper).
 - Don't delay `GameplayStart`. Keep hell and GLB assets lazy.
-- Shop prices (100/120/50) and best-of-3 are NOT user-locked.
+- Shop prices: lifesteal 1500, gold 1500, revive token 500 (user 2026-11-02; the emergency revive at death = 1.5x = 750). The GOLD gun pays a flat +10 per round won. Best-of-3 is NOT user-locked.
+- Ladder loss = back 5 levels on the endless index (into the previous stage if need be, never below stage 1 level 1; `knockedBack`): the revive card states it, the result card shows KNOCKED BACK TO ... (user 2026-11-02).
 
 ## Known drift / open items
 - Preview videos are not made (covers + metadata: `store/`; `npm run shots` = the photo stage for stills). Hit SFX files still missing (`playSFX` requests `hit-body/hit-head.mp3` only if they ship). Hell beds are silent (wind roar only).
