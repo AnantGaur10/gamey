@@ -28,6 +28,7 @@ import { storagePersisted } from "../store/SafeStore";
 import { needsTutorial, markTutorialSeen } from "../portal/firstLaunch";
 import { createAudioManager, HAS_MUSIC, type AudioManager } from "../audio/AudioManager";
 import { installUiSfx } from "./uiSfx";
+import { MENU_BED, mapBed } from "../audio/beds";
 import { initDeviceTier, deviceTier } from "../render/device";
 import { randomCowboyName, cleanName, escapeHtml, displayName, NAME_MAX } from "./names";
 
@@ -77,6 +78,9 @@ export function boot(root: HTMLElement, adapter: PortalAdapter): void {
 
   // iOS audio context resume on user gesture (per CrazyGames specs)
   document.addEventListener("touchend", () => audio.resumeAudioContext());
+  // Any first gesture wakes the context and starts a bed that waited for it.
+  document.addEventListener("pointerdown", () => audio.resumeAudioContext());
+  document.addEventListener("keydown", () => audio.resumeAudioContext());
   installUiSfx(audio); // hover + click sounds on every button
 
   // Restore mute state from progress
@@ -191,7 +195,7 @@ const COIN_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" c
 const STAR_ICON = `<svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="30" fill="#2b1a10" stroke="#d4af37" stroke-width="3"/><path d="M32 8l6.2 13.4 14.7 1.7-10.9 10 2.9 14.5L32 40.3l-12.9 7.3 2.9-14.5-10.9-10 14.7-1.7z" fill="#ffd678" stroke="#8a6414" stroke-width="2" stroke-linejoin="round"/><g fill="#ffd678" stroke="#8a6414" stroke-width="1.5"><circle cx="32" cy="8" r="3"/><circle cx="52.9" cy="23.1" r="3"/><circle cx="44.9" cy="47.6" r="3"/><circle cx="19.1" cy="47.6" r="3"/><circle cx="11.1" cy="23.1" r="3"/></g></svg>`;
 
 export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager): void {
-  audio.playMusic('home-screen');
+  audio.setBed(MENU_BED);
   root.innerHTML = "";
   const progress = adapter.loadProgress();
   // MAP option (user 2026-10-12) opens the picker screen (showMapPicker);
@@ -289,6 +293,7 @@ function showSettings(root: HTMLElement, adapter: PortalAdapter, audio: AudioMan
         <button data-q="low" aria-pressed="${prog.settings.quality === "low"}">LOW</button>
       </div></div>
     </div>
+    <p class="setcredit">Gunshot by Michel Baradari (CC-BY 3.0) · music and ambience CC0 (OpenGameArt)</p>
     <button class="mapback" data-b="back">BACK</button>
   </div>`);
   root.appendChild(page);
@@ -340,7 +345,7 @@ function showSettings(root: HTMLElement, adapter: PortalAdapter, audio: AudioMan
       const p = adapter.loadProgress();
       p.settings[key] = Number(r.value) / 100;
       adapter.saveProgress(p);
-      if (key === "sfx") { audio.resumeAudioContext(); audio.playGunshotSynth(0.5); } // a sample at the new level
+      if (key === "sfx") { audio.resumeAudioContext(); audio.playGunshot(0.5); } // a sample at the new level
     });
   });
 
@@ -593,8 +598,6 @@ function runDuel(
   const mapId: MapId = opts.map ?? series?.map ?? run?.map ?? "street";
   const mapDef = MAPS[mapId];
   hideMenuScene(); // one GL context at a time: the duel builds its own arena
-  audio.stopMusic();
-  audio.playMusic('duel');
   root.innerHTML = "";
   document.body.classList.add("in-duel"); // OS cursor hidden; crosshair is the pointer
   const coarse = isCoarsePointer();
@@ -614,6 +617,9 @@ function runDuel(
   const ai = series?.level !== undefined ? levelAi(series.level, stageIdx) : AI_ROSTER[clamp(stageIdx, 0, AI_ROSTER.length - 1)];
   // Wind picks up as the day goes (noon breeze -> night gusts; hell roars).
   audio.startWind((hellRound ? 0.8 : [0.45, 0.65, 0.85][Math.min(stageIdx, 2)]) * mapDef.wind, hellRound);
+  // The map's bed (tune / ambience); a series' rounds keep it running.
+  audio.setBed(mapBed(mapId, stageIdx, hellRound));
+  audio.warmup(); // decode the gunshot before the first shot
 
   const { scene, camera, renderer, render, release, prepare, worldPerPxAt, fitCamera, setTimeOfDay, noteFrame, setProneFrame, setFloor, buildProceduralStreet } = createArena(distM);
   // Time-of-day driver: R1 noon → R2 evening → R3+ night, coloured per map.
@@ -2367,7 +2373,7 @@ function runDuel(
     kickT = 0;
     machine.phase = "fire";
     ammo -= 1;
-    audio.playGunshotSynth(0.85);
+    audio.playGunshot(0.85);
     paintBars();
     coach?.step("shot", ammo);
 
@@ -2424,7 +2430,7 @@ function runDuel(
       foeAim.applyShotKick();
       foeFired = true;
       gunsmoke.spawn(muzzle, nightBlind); // night: the flash is the only giveaway, so it carries
-      audio.playGunshotSynth(0.6, true); // the foe's shot, down the street
+      audio.playGunshot(0.6, true); // the foe's shot, down the street
       foeKickT = 0; // procedural shooting anim: gun-kick decay in frame loop
       const lethal = bodyDamage(GUNS.default.baseDamage, distM) >= playerHP;
       const b = sim.fire({ from: muzzle, dir, distM, shooter: "foe", gunId: "default", lethal });

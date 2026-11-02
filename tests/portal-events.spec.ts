@@ -110,9 +110,10 @@ test('the site mute applies while the game is running', async ({ page }) => {
   await expect(speaker).not.toHaveClass(/off/);
 });
 
-test('SETTINGS has no music slider while no music ships', async ({ page }) => {
+test('SETTINGS shows the MUSIC slider (the saloon tune ships) and the audio credit', async ({ page }) => {
   await toHome(page);
   await page.click('button[data-m="settings"]');
   await expect(page.locator('input[data-s=sfx]')).toBeVisible();
-  await expect(page.locator('input[data-s=music]')).toHaveCount(0);
+  await expect(page.locator('input[data-s=music]')).toBeVisible();
+  await expect(page.locator('.setcredit')).toContainText('Michel Baradari (CC-BY 3.0)');
 });

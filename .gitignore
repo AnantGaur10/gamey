@@ -7,3 +7,6 @@ playwright-report/
 .DS_Store
 __pycache__/
 store/covers/plates/
+
+# User-supplied source audio (~270MB of wav); the encoded mp3s ship from public/assets/audio (npm run build:audio).
+/sounds/

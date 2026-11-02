@@ -1,22 +1,36 @@
-export type MusicTrack = 'home-screen' | 'duel';
 export type UiSfx = 'hover' | 'click' | 'confirm' | 'back';
 
+/** One looping layer of a map's sound bed (a file in public/assets/audio). */
+export interface BedLayer {
+  file: string;
+  /** Layer level before the bus (0..1). */
+  gain: number;
+  /** music = the MUSIC slider; sfx = environment sounds (SOUND FX slider). */
+  bus: 'music' | 'sfx';
+}
+
 export interface AudioManager {
-  playMusic(track: MusicTrack): Promise<void>;
-  stopMusic(): void;
+  /** The looping sound bed (music + ambience). Idempotent: layers already
+   *  playing keep running (a series' rounds never restart the tune) and only
+   *  retarget their gain; others fade out, new ones fade in. [] = silence. */
+  setBed(layers: BedLayer[]): void;
   setMusicVolume(v: number): void;
-  /** Synthesised revolver shot (Web Audio, zero shipped bytes). far = the
-   *  foe's shot down the street: quieter, duller, more echo. */
-  playGunshotSynth(volume?: number, far?: boolean): void;
+  /** Revolver shot: the pistol sample when it has loaded, else the Web Audio
+   *  synth. far = the foe's shot down the street: quieter, duller, more echo. */
+  playGunshot(volume?: number, far?: boolean): void;
+  /** Fetch + decode the gunshot sample ahead of the first shot. */
+  warmup(): void;
   /** Gusting wind bed for the duel (Web Audio noise). 0 = off ... 1 = gale;
    *  hell = a low hot roar instead of a whistle. */
   startWind(strength: number, hell?: boolean): void;
   stopWind(): void;
+  /** A boot step (synth): pan -1..1, gain 0..1, on boards or in the dirt. */
+  playFootstep(pan: number, gain: number, surface: 'wood' | 'dirt'): void;
   playSFX(sfx: 'hit-body' | 'hit-head', volume?: number): Promise<void>;
   /** Menu sounds (Web Audio synth on the SFX bus): hover = cylinder tick,
    *  click = hammer cock, confirm = cock + spur ring, back = a duller cock. */
   playUiSfx(kind: UiSfx): void;
-  /** SETTINGS SFX level 0..1 (gunshots, wind, hit sounds). */
+  /** SETTINGS SFX level 0..1 (gunshots, wind, ambience, hit sounds). */
   setSfxVolume(v: number): void;
   muteForAd(): void;
   unmuteAfterAd(): void;
@@ -26,31 +40,49 @@ export interface AudioManager {
   isMuted(): boolean;
   /** The site's mute setting (SDK muteAudio): wins over the player's choice. */
   setPortalMuted(m: boolean): void;
+  /** Inside a user gesture: create / wake the context (iOS) and start a bed
+   *  that was waiting for it. */
   resumeAudioContext(): void;
 }
 
-// Audio failures are expected (no music files yet, autoplay policy, no
-// AudioContext) and the game plays on silently: log in dev only.
+// Audio failures are expected (autoplay policy, no AudioContext, a blocked
+// fetch) and the game plays on silently: log in dev only.
 function log(...args: unknown[]): void {
   if (import.meta.env.DEV) console.log(...args);
 }
 
-/** Tracks that ship. Hit sounds live in the same folder and don't count. */
-export const HAS_MUSIC = __MUSIC_FILES__.some((f) => f === 'home-screen.mp3' || f === 'duel.mp3');
+/** Only files that ship are ever requested (`__AUDIO_FILES__`, listed at
+ *  build time by vite.config.ts): a probe for a missing file logged a console
+ *  404 on every prod load (2026-10-21). BASE_URL-relative (portal rule). */
+export function audioUrl(file: string): string | null {
+  return __AUDIO_FILES__.includes(file) ? `${import.meta.env.BASE_URL}assets/audio/${file}` : null;
+}
+
+/** Music tracks (MUSIC bus) that ship: SETTINGS shows the MUSIC slider only then. */
+const MUSIC_FILES = ['home-screen.mp3', 'saloon.mp3'];
+export const HAS_MUSIC = __AUDIO_FILES__.some((f) => MUSIC_FILES.includes(f));
 
 export function createAudioManager(): AudioManager {
   let audioContext: AudioContext | null = null;
   let playerMuted = false;
   let portalMuted = false;
-  const silent = (): boolean => playerMuted || portalMuted;
-  let currentMusic: HTMLAudioElement | null = null;
+  let adMuted = false;
+  const silent = (): boolean => playerMuted || portalMuted || adMuted;
   let musicVolume = 0.5;
   let sfxVolume = 1; // SETTINGS SFX level (synth bus gain + hit sounds)
-  let wasPlayingBeforeAd = false;
+
+  /** True once the page has had a user gesture (or the API is missing). A
+   *  context created before that starts suspended and Chrome logs "The
+   *  AudioContext was not allowed to start". */
+  function gestured(): boolean {
+    const ua = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation;
+    return ua ? ua.hasBeenActive : true;
+  }
 
   function getAudioContext(): AudioContext | null {
     try {
       if (!audioContext) {
+        if (!gestured()) return null;
         const ContextClass = (window as any).AudioContext || (window as any).webkitAudioContext;
         audioContext = new ContextClass();
       }
@@ -68,86 +100,102 @@ export function createAudioManager(): AudioManager {
         // Silent fail - audio may not be available on this device
       });
     }
-  }
-
-  // Music files land in Phase 3 (tail). Only files that ship are ever
-  // requested (`__MUSIC_FILES__`, listed at build time by vite.config.ts):
-  // the old HEAD probe still logged "Failed to load resource" (404) in the
-  // console on every prod load. URL is BASE_URL-relative (relative-paths-
-  // only portal rule — never absolute).
-  function resolveMusicUrl(filename: string): string | null {
-    return __MUSIC_FILES__.includes(filename) ? `${import.meta.env.BASE_URL}assets/music/${filename}` : null;
-  }
-
-  async function loadMusicTrack(track: MusicTrack): Promise<HTMLAudioElement | null> {
-    try {
-      const filename = track === 'home-screen' ? 'home-screen.mp3' : 'duel.mp3';
-      const url = resolveMusicUrl(filename);
-      if (!url) return null;
-      const audio = new Audio(url);
-      audio.loop = true;
-      audio.volume = silent() ? 0 : musicVolume;
-
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Audio load timeout'));
-        }, 5000);
-
-        audio.oncanplay = () => {
-          clearTimeout(timeout);
-          resolve(audio);
-        };
-
-        audio.onerror = (err) => {
-          clearTimeout(timeout);
-          reject(err);
-        };
-
-        audio.load();
-      });
-    } catch (err) {
-      log(`Audio file not found or error loading: ${track}`, err);
-      return null;
+    if (ctx && pendingBed) {
+      const b = pendingBed;
+      pendingBed = null;
+      setBed(b);
     }
   }
 
-  async function playMusic(track: MusicTrack): Promise<void> {
-    try {
-      if (currentMusic) {
-        currentMusic.pause();
-        currentMusic = null;
-      }
+  // --- decoded samples (fetched once per session) --------------------------
+  const buffers = new Map<string, Promise<AudioBuffer | null>>();
+  const ready = new Map<string, AudioBuffer>();
+  function loadBuffer(ctx: AudioContext, file: string): Promise<AudioBuffer | null> {
+    let p = buffers.get(file);
+    if (!p) {
+      const url = audioUrl(file);
+      p = !url
+        ? Promise.resolve(null)
+        : fetch(url)
+            .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${r.status}`))))
+            .then((a) => new Promise<AudioBuffer>((res, rej) => ctx.decodeAudioData(a, res, rej)))
+            .then((b) => { ready.set(file, b); return b; })
+            .catch((err) => { log(`audio ${file} failed`, err); buffers.delete(file); return null; });
+      buffers.set(file, p);
+    }
+    return p;
+  }
 
-      const audio = await loadMusicTrack(track);
-      if (!audio) {
-        log(`Skipping music track: ${track} (file not found)`);
+  // --- the bed: looping layers on the music / sfx buses ---------------------
+  let musicBus: GainNode | null = null;
+  function mbus(ctx: AudioContext): GainNode {
+    if (!musicBus) {
+      musicBus = ctx.createGain();
+      musicBus.gain.value = silent() ? 0 : musicVolume;
+      musicBus.connect(ctx.destination);
+    }
+    return musicBus;
+  }
+  interface Playing { gain: GainNode; src: AudioBufferSourceNode | null; dead: boolean }
+  const bed = new Map<string, Playing>();
+  let pendingBed: BedLayer[] | null = null;
+  const FADE = 0.6; // s, time constant of bed fades
+
+  function setBed(layers: BedLayer[]): void {
+    try {
+      const ctx = audioContext ?? (layers.length ? getAudioContext() : null);
+      if (!ctx) {
+        pendingBed = layers.length ? layers : null; // starts on the first gesture
         return;
       }
-
-      currentMusic = audio;
-      if (!silent()) {
-        audio.play().catch((err) => {
-          log(`Failed to play music: ${err}`);
+      pendingBed = null;
+      const want = new Map(layers.filter((l) => audioUrl(l.file)).map((l) => [l.file, l]));
+      const now = ctx.currentTime;
+      for (const [file, p] of bed) {
+        if (want.has(file)) continue;
+        p.dead = true;
+        p.gain.gain.cancelScheduledValues(now);
+        p.gain.gain.setTargetAtTime(0, now, FADE / 2);
+        const src = p.src;
+        window.setTimeout(() => { try { src?.stop(); p.gain.disconnect(); } catch { /* noop */ } }, FADE * 4000);
+        bed.delete(file);
+      }
+      for (const [file, l] of want) {
+        const live = bed.get(file);
+        if (live) {
+          live.gain.gain.setTargetAtTime(l.gain, now, FADE);
+          continue;
+        }
+        const g = ctx.createGain();
+        g.gain.value = 0;
+        g.connect(l.bus === 'music' ? mbus(ctx) : bus(ctx));
+        const p: Playing = { gain: g, src: null, dead: false };
+        bed.set(file, p);
+        void loadBuffer(ctx, file).then((buf) => {
+          if (!buf || p.dead) return;
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          src.loop = true;
+          src.connect(g);
+          // Ambience starts somewhere inside its loop, so two visits never sound identical.
+          src.start(0, l.bus === 'sfx' ? Math.random() * buf.duration : 0);
+          p.src = src;
+          g.gain.setTargetAtTime(l.gain, ctx.currentTime, FADE);
         });
       }
     } catch (err) {
-      log(`Audio error: ${err}. Game continues.`);
-    }
-  }
-
-  function stopMusic(): void {
-    if (currentMusic) {
-      currentMusic.pause();
-      currentMusic.currentTime = 0;
-      currentMusic = null;
+      log(`bed error: ${err}`);
     }
   }
 
   function setMusicVolume(v: number): void {
     musicVolume = Math.max(0, Math.min(1, v));
-    if (currentMusic) {
-      currentMusic.volume = silent() ? 0 : musicVolume;
-    }
+    if (musicBus && audioContext && !silent()) musicBus.gain.setTargetAtTime(musicVolume, audioContext.currentTime, 0.02);
+  }
+
+  function warmup(): void {
+    const ctx = getAudioContext();
+    if (ctx) void loadBuffer(ctx, 'gunshot.mp3');
   }
 
   // --- synth SFX bus (gunshots + wind): one gain so mute / ad pauses
@@ -241,11 +289,37 @@ export function createAudioManager(): AudioManager {
     src.stop(t + attack + decay + 0.05);
   }
 
-  function playGunshotSynth(volume: number = 0.85, far = false): void {
+  /** The pistol sample (Michel Baradari, CC-BY 3.0): same voice chain as the
+   *  synth (distance lowpass + street echo send), pitch jittered per shot. */
+  function playGunshotSample(ctx: AudioContext, buf: AudioBuffer, volume: number, far: boolean): void {
+    const t = ctx.currentTime + 0.005;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = (far ? 0.9 : 1) * (0.95 + Math.random() * 0.1);
+    const voice = ctx.createGain();
+    voice.gain.value = volume * (far ? 0.55 : 0.9);
+    const tone = ctx.createBiquadFilter();
+    tone.type = 'lowpass';
+    tone.frequency.value = far ? 2600 : 14000;
+    src.connect(voice);
+    voice.connect(tone);
+    tone.connect(bus(ctx));
+    const send = ctx.createGain();
+    send.gain.value = far ? 0.8 : 0.4;
+    tone.connect(send);
+    send.connect(echoSend(ctx));
+    src.start(t);
+    src.onended = () => { try { voice.disconnect(); tone.disconnect(); send.disconnect(); } catch { /* noop */ } };
+  }
+
+  function playGunshot(volume: number = 0.85, far = false): void {
     try {
       if (silent()) return;
       const ctx = getAudioContext();
       if (!ctx) return;
+      const buf = ready.get('gunshot.mp3');
+      if (buf) return playGunshotSample(ctx, buf, volume, far);
+      void loadBuffer(ctx, 'gunshot.mp3'); // next shot has it; this one is synth
       const t = ctx.currentTime + 0.005;
       // Per-shot voice: dry to the bus, plus a send into the street echo.
       const voice = ctx.createGain();
@@ -421,12 +495,47 @@ export function createAudioManager(): AudioManager {
     }
   }
 
+  // --- footsteps: townsfolk boots (synth), panned by where the walker is. ---
+  let stepN = 0;
+  function playFootstep(pan: number, gain: number, surface: 'wood' | 'dirt'): void {
+    try {
+      if (silent() || gain < 0.01) return;
+      const ctx = audioContext; // never the first sound of a session
+      if (!ctx || ctx.state !== 'running') return;
+      const t = ctx.currentTime + 0.002;
+      const p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+      const voice = ctx.createGain();
+      voice.gain.value = gain;
+      if (p) {
+        p.pan.value = Math.max(-1, Math.min(1, pan));
+        voice.connect(p);
+        p.connect(bus(ctx));
+      } else voice.connect(bus(ctx));
+      const j = (k: number) => k * (0.9 + Math.random() * 0.2);
+      if (surface === 'wood') {
+        // Heel on a hollow plank: a low knock + the board's short resonance.
+        noiseHit(ctx, voice, t, 'lowpass', j(420), 0.8, 0.5, 0.002, 0.06);
+        noiseHit(ctx, voice, t, 'bandpass', j(950), 6, 0.35, 0.001, 0.035);
+        ping(ctx, voice, t, j(190), 0.18, 0.08);
+      } else {
+        // Boot in packed dirt: a dull thud + a little grit.
+        noiseHit(ctx, voice, t, 'lowpass', j(260), 0.7, 0.45, 0.004, 0.07);
+        noiseHit(ctx, voice, t + 0.01, 'highpass', j(2600), 0.7, 0.05, 0.004, 0.05);
+      }
+      // A spur's jingle on every other step.
+      if (stepN++ % 2 === 0) ping(ctx, voice, t + 0.02, j(5200), 0.03, 0.12);
+      window.setTimeout(() => { try { voice.disconnect(); p?.disconnect(); } catch { /* noop */ } }, 400);
+    } catch (err) {
+      log(`footstep error: ${err}`);
+    }
+  }
+
   async function playSFX(sfx: 'hit-body' | 'hit-head', volume: number = 0.8): Promise<void> {
     try {
       if (silent()) return;
 
       const filename = sfx === 'hit-body' ? 'hit-body.mp3' : 'hit-head.mp3';
-      const url = resolveMusicUrl(filename);
+      const url = audioUrl(filename);
       if (!url) return;
       const audio = new Audio(url);
       audio.volume = Math.min(1, volume * sfxVolume);
@@ -439,43 +548,26 @@ export function createAudioManager(): AudioManager {
     }
   }
 
-  function setBus(on: boolean): void {
-    if (sfxBus && audioContext) sfxBus.gain.setTargetAtTime(on ? sfxVolume : 0, audioContext.currentTime, 0.02);
+  function applyMute(): void {
+    if (!audioContext) return;
+    const t = audioContext.currentTime;
+    if (sfxBus) sfxBus.gain.setTargetAtTime(silent() ? 0 : sfxVolume, t, 0.02);
+    if (musicBus) musicBus.gain.setTargetAtTime(silent() ? 0 : musicVolume, t, 0.02);
   }
 
   function setSfxVolume(v: number): void {
     sfxVolume = Math.max(0, Math.min(1, v));
-    if (!silent()) setBus(true);
+    applyMute();
   }
 
   function muteForAd(): void {
-    setBus(false);
-    wasPlayingBeforeAd = currentMusic !== null && !currentMusic.paused;
-    if (currentMusic) {
-      currentMusic.pause();
-    }
+    adMuted = true;
+    applyMute();
   }
 
   function unmuteAfterAd(): void {
-    if (!silent()) setBus(true);
-    if (wasPlayingBeforeAd && currentMusic) {
-      currentMusic.play().catch((err) => {
-        log('Failed to resume music after ad:', err);
-      });
-    }
-  }
-
-  function applyMute(): void {
-    setBus(!silent());
-    if (!currentMusic) return;
-    if (silent()) {
-      currentMusic.pause();
-    } else {
-      currentMusic.volume = musicVolume;
-      currentMusic.play().catch((err) => {
-        log('Failed to resume music:', err);
-      });
-    }
+    adMuted = false;
+    applyMute();
   }
 
   function toggleMute(): boolean {
@@ -496,10 +588,11 @@ export function createAudioManager(): AudioManager {
   }
 
   return {
-    playMusic,
-    stopMusic,
+    setBed,
     setMusicVolume,
-    playGunshotSynth,
+    playGunshot,
+    warmup,
+    playFootstep,
     startWind,
     stopWind,
     playSFX,

@@ -44,12 +44,12 @@ function entryAsIndex(): Plugin {
   };
 }
 
-/** Music tracks that actually ship (public/assets/music): AudioManager
-    requests only these. A probe for a missing file logged a console 404 on
-    every prod load (2026-10-21). */
-function musicFiles(): string[] {
+/** Audio files that actually ship (public/assets/audio, built from sounds/ by
+    `npm run build:audio`): AudioManager requests only these. A probe for a
+    missing file logged a console 404 on every prod load (2026-10-21). */
+function audioFiles(): string[] {
   try {
-    return readdirSync("public/assets/music").filter((f) => /\.(mp3|ogg)$/i.test(f));
+    return readdirSync("public/assets/audio").filter((f) => /\.(mp3|ogg)$/i.test(f));
   } catch {
     return [];
   }
@@ -59,7 +59,7 @@ export default defineConfig({
   base: "./",
   plugins: [preloadGameChunks(), entryAsIndex()],
   define: {
-    __MUSIC_FILES__: JSON.stringify(musicFiles()),
+    __AUDIO_FILES__: JSON.stringify(audioFiles()),
   },
   server: {
     host: "0.0.0.0",

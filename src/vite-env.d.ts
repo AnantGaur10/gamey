@@ -1,4 +1,4 @@
 /// <reference types="vite/client" />
 
-/** Music files in public/assets/music at build time (vite.config.ts). */
-declare const __MUSIC_FILES__: string[];
+/** Audio files in public/assets/audio at build time (vite.config.ts). */
+declare const __AUDIO_FILES__: string[];

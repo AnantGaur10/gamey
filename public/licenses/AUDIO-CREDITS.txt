@@ -1,0 +1,16 @@
+HIGH NOON DUEL - audio credits
+
+Gunshot: "Chaingun, pistol, rifle, shotgun shots" (pistol) by Michel Baradari
+  https://opengameart.org/content/chaingun-pistol-rifle-shotgun-shots
+  Licence: CC-BY 3.0  https://creativecommons.org/licenses/by/3.0/
+  Changes: trimmed, mixed to mono, limited, encoded to MP3.
+
+Saloon music: "Miniature Saloon" by Zane Little Music
+  https://opengameart.org/content/miniature-saloon
+  Licence: CC0 1.0 (public domain)
+
+The Falls ambience: "Park ambiences" (river, birds) by Thimras
+  https://opengameart.org/content/park-ambiences
+  Licence: CC0 1.0 (public domain)
+
+Wind, footsteps and menu sounds are synthesised in code (Web Audio).
