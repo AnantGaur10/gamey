@@ -3,7 +3,7 @@ import { test, expect, Page } from '@playwright/test';
 // Revive prompt (user 2026-11-02): standard mode only on the death that would
 // lose the match (2nd lost round of the best-of-3); never on the first.
 
-type G = { __gamey: { round(i: number, d?: number, hp?: number): void; state(): { playerHP: number; roundOver: boolean } } };
+type G = { __gamey: { round(i: number, d?: number, hp?: number, ladder?: boolean): void; state(): { playerHP: number; roundOver: boolean } } };
 
 async function home(page: Page): Promise<void> {
   await page.goto('/basic.html?nosdk=1');
@@ -28,7 +28,7 @@ async function home(page: Page): Promise<void> {
 
 /** Round i at 6m with 1 HP: hold the holster through DRAW, never fire, die. */
 async function dieInRound(page: Page, i: number): Promise<boolean> {
-  await page.evaluate((i) => (window as unknown as G).__gamey.round(i, 6, 1), i);
+  await page.evaluate((i) => (window as unknown as G).__gamey.round(i, 6, 1, true), i); // keep the ladder level
   await page.waitForFunction(() => !document.querySelector('.boot'), undefined, { timeout: 60000 });
   const z = (await page.locator('.readyzone').boundingBox())!;
   await page.mouse.move(z.x + z.width / 2, z.y + z.height / 2);

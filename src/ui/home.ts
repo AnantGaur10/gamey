@@ -1270,7 +1270,7 @@ function runDuel(
       /** Jump straight into a hell sudden-death round (repro/tests). */
       hell: (d?: number) => { cleanup(); runDuel(root, adapter, mode, audio, series, true, reviveUsed, { run, distM: d }); },
       /** Jump to best-of round i (0 noon, 1 evening, 2 night) at 1-1. */
-      round: (i: number, d?: number, hp?: number) => { cleanup(); runDuel(root, adapter, "standard", audio, { roundIndex: i, pWins: Math.min(Math.ceil(i / 2), 1), fWins: Math.min(Math.floor(i / 2), 1), map: mapId, level: series?.level }, false, reviveUsed, { distM: d, startHP: hp }); },
+      round: (i: number, d?: number, hp?: number, ladder = false) => { cleanup(); runDuel(root, adapter, "standard", audio, { roundIndex: i, pWins: Math.min(Math.ceil(i / 2), 1), fWins: Math.min(Math.floor(i / 2), 1), map: mapId, level: ladder ? series?.level : undefined }, false, reviveUsed, { distM: d, startHP: hp }); },
       /** Jump to a map at round i (hell = its hell round), optional distance. */
       map: (id: MapId, i = 0, hell = false, d?: number) => { cleanup(); runDuel(root, adapter, "standard", audio, { roundIndex: i, pWins: Math.min(Math.ceil(i / 2), 1), fWins: Math.min(Math.floor(i / 2), 1), map: id }, hell, reviveUsed, { distM: d }); },
       /** Ladder level n (1-based) from its first round (its foe + AI). */
