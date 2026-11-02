@@ -28,6 +28,7 @@ import { storagePersisted } from "../store/SafeStore";
 import { needsTutorial, markTutorialSeen } from "../portal/firstLaunch";
 import { createAudioManager, HAS_MUSIC, type AudioManager } from "../audio/AudioManager";
 import { installUiSfx } from "./uiSfx";
+import { installRotatePrompt } from "./rotate";
 import { createTownsfolk, folkCount, type Townsfolk } from "../render/townsfolk";
 import { mountGunViews } from "./gunViewer";
 import { MENU_BED, mapBed } from "../audio/beds";
@@ -84,6 +85,7 @@ export function boot(root: HTMLElement, adapter: PortalAdapter): void {
   document.addEventListener("pointerdown", () => audio.resumeAudioContext());
   document.addEventListener("keydown", () => audio.resumeAudioContext());
   installUiSfx(audio); // hover + click sounds on every button
+  installRotatePrompt(!adapter.onPortal); // landscape only: a portrait phone gets "rotate your phone"
 
   // Restore mute state from progress
   if (progress.settings.mute) {
@@ -2841,11 +2843,15 @@ function runDuel(
   window.addEventListener("keydown", onPauseKey);
   const onHidden = (): void => { if (document.hidden) setPaused(true); };
   document.addEventListener("visibilitychange", onHidden);
+  // A phone turned to portrait pauses the duel (the rotate card covers it).
+  const onPortrait = (e: Event): void => { if ((e as CustomEvent<boolean>).detail) setPaused(true); };
+  window.addEventListener("gamey:portrait", onPortrait);
 
   function cleanup(): void {
     alive = false;
     window.removeEventListener("keydown", onPauseKey);
     document.removeEventListener("visibilitychange", onHidden);
+    window.removeEventListener("gamey:portrait", onPortrait);
     pauseEl?.remove();
     pauseBtn.remove();
     stopGameplay();

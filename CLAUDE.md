@@ -57,6 +57,7 @@ AGENTS.md holds the project rules (single SDK build, adapter gating, git workflo
 - Physics must hold at 60/144/165Hz: everything runs on the shared fixed 1/60s stepper and renders interpolated by alpha. Never step by frame count.
 - English required. Avoid Esc and Ctrl/Cmd+W (the pause is P / a button). No custom fullscreen button. No cross-promo.
 - `user-select:none`. Resume the `AudioContext` inside a gesture. Relative paths only.
+- Landscape only: portrait touch devices get `src/ui/rotate.ts`'s ROTATE YOUR PHONE card (off on crazygames.com, `adapter.onPortal`: the portal prompts; select landscape in the submission) and the duel pauses. Never `screen.orientation.lock` outside the DEV fullscreen helper in `main.ts`.
 - Guests can always play. No external logins.
 - Ads off (`ADS_ENABLED=false`, required in Basic Launch): no "watch ad" buttons at all (`adapter.adsEnabled`), no freezes. Rewarded ads are optional with an equal-size no-ad option.
 

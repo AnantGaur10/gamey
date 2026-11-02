@@ -99,6 +99,7 @@ export function createCrazyGamesAdapter(): PortalAdapter {
 
   return {
     get kind() { return sdk ? "sdk" as const : "none" as const; },
+    get onPortal() { return sdk?.environment === "crazygames"; },
     get adsEnabled() { return ads && !!sdk; },
     async init() {
       try {

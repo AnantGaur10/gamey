@@ -44,6 +44,10 @@ export interface DeviceInfo {
 export interface PortalAdapter {
   /** "sdk" = CrazyGames SDK live, "none" = no SDK (load failed / ?nosdk / other site). */
   readonly kind: "sdk" | "none";
+  /** Running on crazygames.com itself (SDK environment "crazygames"): the
+      portal draws its own rotate-to-landscape prompt (orientation is set in
+      the submission), so the game must not draw a second one. */
+  readonly onPortal: boolean;
   /** Rewarded/midgame ads may be offered. Game code shows "watch ad" buttons
       ONLY when true (Basic Launch QA: no dead rewarded buttons). */
   readonly adsEnabled: boolean;

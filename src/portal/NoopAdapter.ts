@@ -10,6 +10,7 @@ const KEY = "gamey.v1";
 export function createNoopAdapter(): PortalAdapter {
   return {
     kind: "none",
+    onPortal: false,
     adsEnabled: false,
     async init() {},
     gameplayStart() {},

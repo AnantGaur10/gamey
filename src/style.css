@@ -945,3 +945,14 @@ body.in-duel, body.in-duel #app, body.in-duel #app * { cursor: none !important; 
 .pause-btn:hover { background: rgba(70, 42, 14, 0.85); }
 .pausemenu { z-index: 20; background: rgba(14, 7, 3, 0.72); }
 .pausemenu .setpanel { width: min(460px, calc(100vw - 32px)); }
+/* Rotate-to-landscape card (ui/rotate.ts): portrait touch devices only. */
+.rotate-card {
+  position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: 24px; text-align: center; background: radial-gradient(circle at 50% 40%, #3a2412, #120904 75%);
+  color: #ffe9bd; text-shadow: 0 2px 0 #4a2c10, 0 4px 14px rgba(0, 0, 0, 0.8); pointer-events: auto; touch-action: none;
+}
+.rotate-card .rc-phone { width: 96px; height: 96px; color: #ffd678; animation: rcturn 2.2s ease-in-out infinite; }
+.rotate-card .rc-phone svg { width: 100%; height: 100%; }
+.rotate-card b { font-size: 26px; letter-spacing: 0.1em; color: #ffd678; }
+.rotate-card small { font-size: 15px; letter-spacing: 0.04em; opacity: 0.85; }
+@keyframes rcturn { 0%, 25% { transform: rotate(0deg); } 55%, 100% { transform: rotate(-90deg); } }
