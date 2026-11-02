@@ -66,7 +66,14 @@ export function mountFocusUI(root: HTMLElement, h: FocusHandlers): FocusUI {
   const ui = document.createElement("div");
   ui.className = "qte";
   ui.innerHTML =
-    `<svg class="qtrack" xmlns="${SVG_NS}">` +
+    // Metallic (user 2026-11-02): silver track + needle, gold zone. User-space
+    // gradients (resized with the ring): a straight needle has a zero-width
+    // bounding box, which would drop a bbox gradient.
+    `<svg class="qtrack" xmlns="${SVG_NS}"><defs>` +
+    `<linearGradient id="q-silver" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffffff"/><stop offset="0.3" stop-color="#b9c0ca"/><stop offset="0.55" stop-color="#7d848f"/><stop offset="0.8" stop-color="#dfe4ea"/><stop offset="1" stop-color="#8a919c"/></linearGradient>` +
+    `<linearGradient id="q-gold" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff3b8"/><stop offset="0.35" stop-color="#f2c349"/><stop offset="0.65" stop-color="#a87714"/><stop offset="1" stop-color="#f7d26a"/></linearGradient>` +
+    `<linearGradient id="q-needle" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffffff"/><stop offset="0.5" stop-color="#c9ced6"/><stop offset="1" stop-color="#ffffff"/></linearGradient>` +
+    `</defs>` +
     `<path class="qbase"/><path class="qzone"/><path class="qperfect"/><path class="qneedle"/>` +
     `</svg>` +
     `<span class="qinfo"><span class="qres"></span><span class="qstreak"></span></span>` +
@@ -116,6 +123,10 @@ export function mountFocusUI(root: HTMLElement, h: FocusHandlers): FocusUI {
         svg.setAttribute("width", `${size}`);
         svg.setAttribute("height", `${size}`);
         svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+        for (const g of svg.querySelectorAll("linearGradient")) {
+          g.setAttribute("x1", "0"); g.setAttribute("y1", "0");
+          g.setAttribute("x2", `${size}`); g.setAttribute("y2", `${size}`);
+        }
       }
       const rr = root.getBoundingClientRect();
       ui.style.left = `${v.x - rr.left}px`;

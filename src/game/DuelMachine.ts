@@ -225,12 +225,13 @@ export class DuelMachine {
     this.bloomDeg = base + this.kickDeg;
   }
 
-  /** Player shot: crosshair x SHOT_KICK_MULT of its current size, then the
-      ease-in return restarts (recoverKick). */
-  applyShotKick(): void {
+  /** Player shot: crosshair x SHOT_KICK_MULT of its current size (scaled by
+      the gun's recoil 0..1: 1 = the full x1.5), then the ease-in return
+      restarts (recoverKick). */
+  applyShotKick(recoil = 1): void {
     const base = this.baseBloomDeg;
     this.rbOn = false;
-    this.setKick(this.bloomDeg * SHOT_KICK_MULT - base);
+    this.setKick(this.bloomDeg * (1 + (SHOT_KICK_MULT - 1) * recoil) - base);
     this.kickFrom = this.kickDeg;
     this.kickT = 0;
   }

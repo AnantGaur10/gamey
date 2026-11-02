@@ -456,6 +456,7 @@ function gunCard(id: (typeof SHOP_GUNS)[number]["id"], name: string, perk: strin
     ${bar("DAMAGE", g.baseDamage / 60, String(g.baseDamage))}
     ${bar("ACCURACY", acc / 100, String(acc))}
     ${bar("FIRE RATE", rate / 3, `${rate.toFixed(1)}/s`)}
+    ${bar("RECOIL", g.recoil, String(Math.round(g.recoil * 100)))}
     <div class="gperk">${perk}</div>
     ${action}
   </div>`;
@@ -938,14 +939,34 @@ function runDuel(
     root.appendChild(el(`<div class="lvl-banner"><span>STAGE ${lpos!.stage} · LEVEL ${lpos!.idx + 1} OF ${LEVEL_COUNT}</span><b>${ladder.name}</b><i>${ladder.tagline}</i></div>`));
   }
   
+  // Revolver cylinder (metallic, user 2026-11-02): brushed steel body with a
+  // silver rim, live chambers = brass cartridge heads with a silver primer,
+  // spent = dark steel bores. Gradients by id (one cylinder on screen).
   const cylinder = el(`<div class="cylinder">
     <svg viewBox="0 0 100 100">
+      <defs>
+        <linearGradient id="m-steel" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#eef1f5"/><stop offset="0.28" stop-color="#9aa1ab"/>
+          <stop offset="0.55" stop-color="#5b616b"/><stop offset="0.78" stop-color="#b8bfc8"/><stop offset="1" stop-color="#6c727c"/>
+        </linearGradient>
+        <linearGradient id="m-rim" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#ffffff"/><stop offset="0.5" stop-color="#a7adb6"/><stop offset="1" stop-color="#3f444b"/>
+        </linearGradient>
+        <radialGradient id="m-brass" cx="0.38" cy="0.32" r="0.75">
+          <stop offset="0" stop-color="#fff6c8"/><stop offset="0.35" stop-color="#f0c450"/>
+          <stop offset="0.75" stop-color="#b8861c"/><stop offset="1" stop-color="#6e4c0c"/>
+        </radialGradient>
+        <radialGradient id="m-bore" cx="0.5" cy="0.45" r="0.6">
+          <stop offset="0" stop-color="#0c0c0f"/><stop offset="0.7" stop-color="#25282e"/><stop offset="1" stop-color="#4a4f57"/>
+        </radialGradient>
+      </defs>
       <circle cx="50" cy="50" r="45" class="cyl-outline"/>
+      <circle cx="50" cy="50" r="7" class="cyl-pin"/>
       ${Array.from({length: 6}, (_, i) => {
         const angle = (i * 60 - 90) * Math.PI / 180;
         const cx = 50 + 30 * Math.cos(angle);
         const cy = 50 + 30 * Math.sin(angle);
-        return `<circle cx="${cx}" cy="${cy}" r="10" class="chamber live" data-idx="${i}"/>`;
+        return `<g class="chamber live" data-idx="${i}"><circle cx="${cx}" cy="${cy}" r="10" class="ch-case"/><circle cx="${cx}" cy="${cy}" r="3.6" class="ch-primer"/></g>`;
       }).join('')}
     </svg>
   </div>`);
@@ -1606,7 +1627,7 @@ function runDuel(
   const foeBar = hp.querySelector(".foe i") as HTMLElement;
   const youFace = hp.querySelector(".you .face") as HTMLElement;
   const foeFace = hp.querySelector(".foe .face") as HTMLElement;
-  const chambers = Array.from(cylinder.querySelectorAll(".chamber")) as SVGCircleElement[];
+  const chambers = Array.from(cylinder.querySelectorAll(".chamber")) as SVGGElement[];
 
   // Revive restarts at 1HP (locked 09-26 §6); a deathmatch run carries its HP
   // between duels. Hell rounds start both at full HP.
@@ -2443,7 +2464,8 @@ function runDuel(
     // Spread from the crosshair the player saw at the click, THEN the kick
     // (it used to kick first: every shot spread at x1.5 the shown circle).
     const dir = playerDirFromClick(cx, cy, muzzle);
-    machine.applyShotKick(); // x1.5, accelerating return to the pre-shot size
+    machine.applyShotKick(gun.recoil); // x1.5 at full recoil, accelerating return to the pre-shot size
+    shakeCam(0.018 * gun.recoil); // the gun bucking in your hand
     showSpreadCross(cx, cy);
     gunsmoke.spawn(muzzle);
   // Lethal-if-it-hits at fire time (locked double-KO rule): head always
@@ -3067,7 +3089,12 @@ function runDuel(
       if (pointerKnown) placeCross(pointerPx.x, pointerPx.y);
     }
     if (machine.phase === "ready") renderQte(qte.pos); // ring rides the holster zone (laid out after the first render)
-    (coarse ? pad : zone).classList.toggle("qting", machine.phase === "focus" && !machine.paused); // label off while the ring runs in it
+    // Holding the holster (mouse in it / thumb on it) runs Focus: the HOLSTER
+    // box and its text fade so only the QTE shows (user 2026-11-02); they come
+    // back the moment you leave it. Touch: the pad's caption goes too.
+    const focusing = machine.phase === "focus" && !machine.paused;
+    zone.classList.toggle("qting", focusing);
+    if (coarse) pad.classList.toggle("qting", focusing);
     if (coarse) pad.classList.toggle("off", roundOver);
     if (machine.phase === "focus") {
       // PC: the countdown only runs while the pointer stays in the holster
@@ -3161,14 +3188,14 @@ function runDuel(
       // smooth motion to wherever the pointer moves — never a snap.
       aimWorld.lerp(aimTarget, 1 - Math.exp(-dt * 20));
       kickT += dt;
-      const kick = 0.3 * Math.exp(-kickT * 10); // visible recoil kick (shooting anim)
+      const kick = 0.42 * gun.recoil * Math.exp(-kickT * 10); // visible recoil kick (shooting anim), by the gun's recoil
       player.armR.getWorldPosition(shoulder);
       aimDir.copy(aimWorld).sub(shoulder);
       const horiz = Math.max(0.001, Math.hypot(aimDir.x, aimDir.z));
       const targetYaw = clamp(Math.atan2(aimDir.x, aimDir.z) - playerYaw, -0.7, 0.7);
       player.armR.rotation.y += (targetYaw - player.armR.rotation.y) * (1 - Math.exp(-dt * 14));
       poseArm(clamp(-Math.atan2(aimDir.y, horiz), -0.6, 1.0), dt, kick);
-      player.group.rotation.z = playerRoll + 0.035 * Math.exp(-kickT * 7); // firing rock over wound roll
+      player.group.rotation.z = playerRoll + 0.045 * gun.recoil * Math.exp(-kickT * 7); // firing rock over wound roll
 
       const s = project(aimWorld);
       placeCross(s.x, s.y);

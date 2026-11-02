@@ -15,6 +15,10 @@ export interface GunDef {
   cooldownMs: number;
   extra: ExtraKind;
   extraValue: number; // lifesteal fraction (0.2) or gold bonus fraction (0.4)
+  /** Recoil 0..1 (user 2026-11-02: DAMAGE kicks hardest, then LIFESTEAL,
+      then GOLD): scales the shot's crosshair kick (1 = the locked x1.5,
+      DuelMachine.applyShotKick) and the visible arm / camera kick. */
+  recoil: number;
 }
 
 export const GUNS: Record<string, GunDef> = {
@@ -27,6 +31,7 @@ export const GUNS: Record<string, GunDef> = {
     cooldownMs: 380,
     extra: "none",
     extraValue: 0,
+    recoil: 1,
   },
   lifesteal: {
     id: "lifesteal",
@@ -37,6 +42,7 @@ export const GUNS: Record<string, GunDef> = {
     cooldownMs: 620,
     extra: "lifesteal",
     extraValue: 0.2,
+    recoil: 0.75,
   },
   gold: {
     id: "gold",
@@ -47,6 +53,7 @@ export const GUNS: Record<string, GunDef> = {
     cooldownMs: 650,
     extra: "gold",
     extraValue: 0.4,
+    recoil: 0.5,
   },
 };
 
