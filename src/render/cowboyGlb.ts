@@ -207,8 +207,10 @@ function armVisualIk(
     const d = Math.min(L1 + L2 - 1e-4, Math.max(Math.abs(L1 - L2) + 1e-4, dRaw));
     const a = (L1 * L1 - L2 * L2 + d * d) / (2 * d);
     const h = Math.sqrt(Math.max(0, L1 * L1 - a * a));
-    // Elbow side: behind, a touch below and out to the gun side, as a human's.
-    pole.copy(fwd).multiplyScalar(-1).addScaledVector(up, -0.35).addScaledVector(left, -0.4);
+    // Elbow side: out to the gun side, then down, a little back: the
+    // gunslinger's flared elbow over the holster, below the gun when aiming.
+    // (Mostly-back folded the upper arm back level on the holster grip.)
+    pole.copy(left).multiplyScalar(-1).addScaledVector(up, -0.6).addScaledVector(fwd, -0.35);
     p.copy(pole).addScaledVector(u, -pole.dot(u));
     if (p.lengthSq() < 1e-6) p.copy(up).multiplyScalar(-1).addScaledVector(u, up.dot(u)); // -up, off the u line
     p.normalize();

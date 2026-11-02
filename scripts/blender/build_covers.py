@@ -11,7 +11,7 @@ COVER_ONLY (land|port|square), COVER_FOE (outfit, default outlaw).
 Never opens or saves a .blend; reads only public/models/*.glb.
 """
 import bpy, math, os
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -121,11 +121,76 @@ def place(objs, prefix, loc, yaw_deg):
     root.rotation_euler = (0, 0, math.radians(yaw_deg))
     return root
 
+def arm_ik(prefix, grip_local, root):
+    """The visible gun arm as a human arm, like the game's armVisualIk
+    (render/cowboyGlb.ts, user 2026-11-02): every rig authors the elbow pivot
+    45-60 deg in front of the shoulder, so with the hand on the holstered grip
+    the elbow bent backwards. The two meshes are placed by a two-bone IK from
+    the shoulder to the grip spot (the gun's rest position under elbowR),
+    elbow out to the gun side, down, a little back; rig lengths.
+    Blender frame: the forearm/sleeve long axis is local Z, model forward +Y,
+    the gun side +X."""
+    bpy.context.view_layer.update()
+    arm = bpy.data.objects.get(f"{prefix}_armR")
+    elbow = bpy.data.objects.get(f"{prefix}_elbowR")
+    sleeve = bpy.data.objects.get(f"{prefix}_Sleeve_R")
+    fore = bpy.data.objects.get(f"{prefix}_Fore_R")
+    if not (arm and elbow and sleeve and fore and grip_local is not None):
+        return
+    L1 = elbow.location.length
+    L2 = grip_local.length
+    offU = sleeve.location.length
+    offF = fore.location.length
+    S = arm.matrix_world.translation.copy()
+    W = elbow.matrix_world @ grip_local
+    rot = root.matrix_world.to_3x3().normalized()
+    fwd = rot @ Vector((0, 1, 0))
+    up = Vector((0, 0, 1))
+    right = rot @ Vector((1, 0, 0))
+    u = W - S
+    d_raw = u.length
+    if d_raw < 1e-5:
+        return
+    u /= d_raw
+    d = min(L1 + L2 - 1e-4, max(abs(L1 - L2) + 1e-4, d_raw))
+    a = (L1 * L1 - L2 * L2 + d * d) / (2 * d)
+    h = math.sqrt(max(0.0, L1 * L1 - a * a))
+    pole = right - 0.6 * up - 0.35 * fwd  # flared out to the gun side, then down, a little back (= the game)
+    p = pole - u * pole.dot(u)
+    if p.length < 1e-6:
+        p = -up - u * (-up).dot(u)
+    p.normalize()
+    E = S + u * a + p * h
+
+    def put(obj, z_dir, x_ref, centre):
+        z = z_dir.normalized()
+        x = x_ref - z * x_ref.dot(z)
+        if x.length < 1e-6:
+            x = fwd - z * fwd.dot(z)
+        x.normalize()
+        y = z.cross(x)
+        m = Matrix((x, y, z)).transposed().to_4x4()
+        m.translation = centre
+        obj.matrix_world = m
+
+    zu = (S - E).normalized()
+    put(sleeve, zu, right, S - zu * offU)
+    zf = (E - W).normalized()
+    put(fore, zf, elbow.matrix_world.to_3x3() @ Vector((1, 0, 0)), E - zf * offF)
+
+
 def cowboy(glb, prefix, loc, yaw_deg, clip="idle"):
     objs = import_glb(glb)
     repaint(objs)
+    # The grip spot on the forearm: where the gun sits under the elbow at rest
+    # (read before pose_cowboy moves the gun into its holster).
+    bpy.context.view_layer.update()
+    gun = bpy.data.objects.get(f"{prefix}_Gun")
+    elbow = bpy.data.objects.get(f"{prefix}_elbowR")
+    grip_local = (elbow.matrix_world.inverted() @ gun.matrix_world).translation.copy() if gun and elbow else None
     pose_cowboy(objs, prefix, clip)
-    place(objs, prefix, loc, yaw_deg)
+    root = place(objs, prefix, loc, yaw_deg)
+    arm_ik(prefix, grip_local, root)
     return objs
 
 def world():
