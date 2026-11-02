@@ -18,6 +18,10 @@ $FF -i "$SRC/gun/pistol.wav" -af "atrim=0:0.92,afade=t=out:st=0.84:d=0.08,pan=mo
 $FF -i "$SRC/maps/saloon/miniature_saloon.wav" -af "atrim=0:32.3,afade=t=out:st=32.1:d=0.2,loudnorm=I=-20:TP=-1.5:LRA=11" \
   -ar 44100 -c:a libmp3lame -b:a 112k "$OUT/saloon.mp3"
 
+# Menu tune "Lasso Lady" (congusbongus, CC0): already a seamless loop, kept whole.
+$FF -i "$SRC/menu/lassolady.ogg" -af "loudnorm=I=-21:TP=-1.5:LRA=11" \
+  -ar 44100 -c:a libmp3lame -b:a 112k "$OUT/home-screen.mp3"
+
 # Falls ambience (Thimras, CC0): seamless loops. A 3s crossfade of the cut's tail
 # into its head: body[3..L] + xfade(body tail, head) = a loop with no seam.
 loop() { # src start len xfade channels bitrate loudness out

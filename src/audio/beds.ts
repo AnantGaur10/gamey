@@ -5,8 +5,8 @@
 import type { BedLayer } from "./AudioManager";
 import type { MapId } from "../render/maps";
 
-/** The home screen: its tune once `home-screen.mp3` ships, else silence. */
-export const MENU_BED: BedLayer[] = [{ file: "home-screen.mp3", gain: 1, bus: "music" }];
+/** The home screen: "Lasso Lady" (congusbongus, CC0), a seamless loop. */
+export const MENU_BED: BedLayer[] = [{ file: "home-screen.mp3", gain: 0.55, bus: "music" }]; // chiptune: square waves read loud
 
 export function mapBed(map: MapId, stage: number, hell: boolean): BedLayer[] {
   if (hell) return [];

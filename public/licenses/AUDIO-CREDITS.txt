@@ -5,6 +5,10 @@ Gunshot: "Chaingun, pistol, rifle, shotgun shots" (pistol) by Michel Baradari
   Licence: CC-BY 3.0  https://creativecommons.org/licenses/by/3.0/
   Changes: trimmed, mixed to mono, limited, encoded to MP3.
 
+Menu music: "Lasso Lady (seamless loop)" by congusbongus
+  https://opengameart.org/content/lasso-lady-seamless-loop
+  Licence: CC0 1.0 (public domain)
+
 Saloon music: "Miniature Saloon" by Zane Little Music
   https://opengameart.org/content/miniature-saloon
   Licence: CC0 1.0 (public domain)
