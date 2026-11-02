@@ -47,29 +47,54 @@ export const LEVELS: readonly Level[] = [
 
 export const LEVEL_COUNT = LEVELS.length;
 
-/** Saved ladder position (Progress.level: next unbeaten level, LEVEL_COUNT =
-    ladder cleared) -> the level PLAY starts. A cleared ladder replays the
-    final duel. Bad or missing saves start at level 1. */
-export function playableLevel(saved: number | undefined): number {
-  const n = Number.isFinite(saved) ? Math.floor(saved as number) : 0;
-  return Math.min(Math.max(n, 0), LEVEL_COUNT - 1);
+// Endless ladder (user 2026-11-02): beating THE WIDOW starts STAGE 2 with the
+// same ten foes, each a little stronger, and so on forever. Progress.level is
+// the absolute ladder index (0 = stage 1 level 1, 10 = stage 2 level 1, ...);
+// an old save at 10 ("ladder cleared") lands on stage 2 level 1.
+/** Per stage past the first: reaction x0.95 (the 180ms floor in runDuel
+    still holds), hand wobble x0.95, focus +0.03. */
+const STAGE_REACTION = 0.95;
+const STAGE_WOBBLE = 0.95;
+const STAGE_FOCUS = 0.03;
+
+/** Stage (1-based) and the level within it (0..LEVEL_COUNT-1). */
+export function ladderPos(n: number): { stage: number; idx: number } {
+  const k = playableLevel(n);
+  return { stage: Math.floor(k / LEVEL_COUNT) + 1, idx: k % LEVEL_COUNT };
 }
 
-/** The foe's AI for a ladder level at `stage` decided rounds into its
+/** The foe at an absolute ladder index. */
+export function ladderLevel(n: number): Level {
+  return LEVELS[ladderPos(n).idx];
+}
+
+/** Saved ladder index -> the level PLAY starts (the next unbeaten one). Bad
+    or missing saves start at stage 1 level 1. */
+export function playableLevel(saved: number | undefined): number {
+  const n = Number.isFinite(saved) ? Math.floor(saved as number) : 0;
+  return Math.max(n, 0);
+}
+
+/** The foe's AI at an absolute ladder index, `stage` decided rounds into its
     best-of-3. Reaction keeps the shared formula in runDuel (x0.85 haste,
-    x0.97^stage); accuracy and focus climb a little per decided round, as the
-    old tiers did, without overtaking the next level's opener much. */
+    x0.97^round, 180ms floor); accuracy and focus climb a little per decided
+    round, as the old tiers did, and every ladder stage past the first makes
+    all ten a bit faster, steadier and sharper. */
 export function levelAi(level: number, stage: number): AIProfile {
-  const l = LEVELS[playableLevel(level)];
+  const { stage: ladderStage, idx } = ladderPos(level);
+  const l = LEVELS[idx];
+  const t = ladderStage - 1;
   const s = Math.max(0, Math.min(stage, 2));
   return {
-    reactionBaseMs: l.reactionBaseMs,
-    accuracyMult: l.accuracyMult * Math.pow(0.95, s),
-    focusQuality: Math.min(0.95, l.focusQuality + 0.04 * s),
+    reactionBaseMs: l.reactionBaseMs * Math.pow(STAGE_REACTION, t),
+    accuracyMult: l.accuracyMult * Math.pow(STAGE_WOBBLE, t) * Math.pow(0.95, s),
+    focusQuality: Math.min(0.95, l.focusQuality + STAGE_FOCUS * t + 0.04 * s),
   };
 }
 
-/** Gold for beating a level the first time (economy is not user-locked). */
+/** Gold for beating a level the first time (economy is not user-locked);
+    later stages pay a little more. */
 export function levelClearGold(level: number): number {
-  return 20 + 5 * (playableLevel(level) + 1);
+  const { stage, idx } = ladderPos(level);
+  return 20 + 5 * (idx + 1) + 10 * (stage - 1);
 }

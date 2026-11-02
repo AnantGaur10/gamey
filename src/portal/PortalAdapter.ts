@@ -13,8 +13,9 @@ export interface Progress {
   settings: { mute: boolean; quality: "low" | "high"; map?: string; sfx?: number; music?: number };
   /** First-launch tutorial finished or skipped: never forced again. */
   tutorialDone?: boolean;
-  /** Standard-mode ladder (game/levels.ts): the next unbeaten level,
-      0-based; LEVEL_COUNT = all ten cleared. Missing on older saves = 0. */
+  /** Standard-mode ladder (game/levels.ts): the next unbeaten level as an
+      absolute index, 0-based and endless (10 = stage 2 level 1, ...; an old
+      "all ten cleared" save of 10 lands there). Missing on older saves = 0. */
   level?: number;
   /** Guest display name (asked after the tutorial, else random; SETTINGS
       renames it). A CrazyGames account name always wins over it. */

@@ -15,7 +15,7 @@ import { createRagdoll, bindAccessories, type Ragdoll } from "../render/ragdoll"
 import { DuelMachine, type WoundPose } from "../game/DuelMachine";
 import { bodyDamage, BASE_HP, LIFESTEAL_CAP_PER_HIT, DUEL_RANGE_MIN, DUEL_RANGE_MAX } from "../game/damage";
 import { GUNS, AI_ROSTER, GOLD_WIN_BESTOF, GOLD_WIN_DEATHMATCH, GOLD_LOSS_CONSOLATION, GOLD_KILL_BONUS, reviveDeathPrice } from "../game/economy";
-import { LEVELS, LEVEL_COUNT, playableLevel, levelAi, levelClearGold } from "../game/levels";
+import { LEVEL_COUNT, playableLevel, levelAi, levelClearGold, ladderPos, ladderLevel } from "../game/levels";
 import { ProjectileSim, testCapsuleHit, predictHit, CAPSULE_FOR_POSE, capsuleMid, DEFAULT_HAT, type BulletState } from "../game/projectiles";
 import { LocalTransport } from "../game/Transport";
 import type { PortalAdapter, Progress } from "../portal/PortalAdapter";
@@ -233,8 +233,8 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
   // Ladder (game/levels.ts): PLAY = the next unbeaten level; the backdrop's
   // next standoff shows that foe (its GLB is then cached for the duel).
   const lv = playableLevel(progress.level);
-  const ladderDone = (progress.level ?? 0) >= LEVEL_COUNT;
-  showMenuScene(mapChoice, progress.equippedGun, { foe: LEVELS[lv].foe });
+  const pos = ladderPos(lv);
+  showMenuScene(mapChoice, progress.equippedGun, { foe: ladderLevel(lv).foe });
   const base = import.meta.env.BASE_URL;
   const mapThumb = mapChoice === "random"
     ? `<span class="optthumb random">${DICE_ICON}</span>`
@@ -246,7 +246,7 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
       <h1><span class="t1">HIGH NOON</span><span class="t2">DUEL</span></h1>
     </header>
     <nav class="opts">
-      <button class="opt primary" data-m="standard"><span class="lbl">PLAY</span><small>${ladderDone ? `Ladder cleared · ${titleCase(LEVELS[lv].name)} again` : `Level ${lv + 1} of ${LEVEL_COUNT} · vs ${titleCase(LEVELS[lv].name)}`}</small></button>
+      <button class="opt primary" data-m="standard"><span class="lbl">PLAY</span><small>Stage ${pos.stage} · Level ${pos.idx + 1} of ${LEVEL_COUNT} · vs ${titleCase(ladderLevel(lv).name)}</small></button>
       <button class="opt" data-m="deathmatch"><span class="lbl">DEATHMATCH</span><small>Duel after duel · one life</small></button>
       <button class="opt" data-m="map"><span class="lbl">MAP</span><small>${mapThumb}${mapLabel(mapChoice)}</small></button>
       <button class="opt" data-m="shop"><span class="lbl">ARMORY</span><small>Revolvers · revive token</small></button>
@@ -556,7 +556,7 @@ const titleCase = (t: string): string => t.toLowerCase().replace(/\b[a-z]/g, (c)
     the foe and its AI; its rig starts downloading now. */
 function runSeries(root: HTMLElement, adapter: PortalAdapter, mode: Mode, audio: AudioManager, level?: number): void {
   const lv = playableLevel(level ?? adapter.loadProgress().level);
-  preloadCowboyGlb(`${import.meta.env.BASE_URL}models/${FOE_LOOKS[LEVELS[lv].foe].glb}`);
+  preloadCowboyGlb(`${import.meta.env.BASE_URL}models/${FOE_LOOKS[ladderLevel(lv).foe].glb}`);
   runDuel(root, adapter, mode, audio, { roundIndex: 0, pWins: 0, fWins: 0, map: rollMap(adapter), level: lv });
 }
 
@@ -627,7 +627,8 @@ function runDuel(
   // still counts for the ROUND line.
   const stageIdx = series ? series.pWins + series.fWins : rIdx;
   const level = run ? Math.floor(run.streak / AI_ROSTER.length) : 0;
-  const ladder = series?.level !== undefined ? LEVELS[series.level] : null;
+  const ladder = series?.level !== undefined ? ladderLevel(series.level) : null;
+  const lpos = series?.level !== undefined ? ladderPos(series.level) : null;
   // Foe AI: a ladder level's own profile (accuracy + focus climbing a little
   // per decided round), else the old per-round tiers (deathmatch, DEV).
   const ai = series?.level !== undefined ? levelAi(series.level, stageIdx) : AI_ROSTER[clamp(stageIdx, 0, AI_ROSTER.length - 1)];
@@ -926,7 +927,7 @@ function runDuel(
     const where = mapId === "street" ? null : mapDef.name;
     const line = (...parts: Array<string | null>): string => parts.filter(Boolean).join(" · ");
     if (hellRound) { roundLine.textContent = line("SUDDEN DEATH — FIRST HIT WINS", where); return; }
-    if (series && ladder) { roundLine.textContent = line(`LEVEL ${series.level! + 1}`, ladder.name, `ROUND ${series.roundIndex + 1}`, `YOU ${series.pWins} – ${series.fWins}`, where); return; }
+    if (series && ladder) { roundLine.textContent = line(`STAGE ${lpos!.stage}`, `LEVEL ${lpos!.idx + 1}`, ladder.name, `ROUND ${series.roundIndex + 1}`, `YOU ${series.pWins} – ${series.fWins}`, where); return; }
     if (series) { roundLine.textContent = line(`ROUND ${series.roundIndex + 1}`, `YOU ${series.pWins} – ${series.fWins} FOE (1ST TO ${FIRST_TO})`, where); return; }
     if (run) { roundLine.textContent = line(`DEATHMATCH`, `STREAK ${run.streak}`, `DUEL ${rIdx + 1}/${AI_ROSTER.length}`, `LOOP ${level + 1}`, where); return; }
     roundLine.textContent = line(where);
@@ -934,7 +935,7 @@ function runDuel(
   paintRound();
   // Ladder intro: who you face, on the first round of a level only.
   if (ladder && series!.roundIndex === 0 && !hellRound) {
-    root.appendChild(el(`<div class="lvl-banner"><span>LEVEL ${series!.level! + 1} OF ${LEVEL_COUNT}</span><b>${ladder.name}</b><i>${ladder.tagline}</i></div>`));
+    root.appendChild(el(`<div class="lvl-banner"><span>STAGE ${lpos!.stage} · LEVEL ${lpos!.idx + 1} OF ${LEVEL_COUNT}</span><b>${ladder.name}</b><i>${ladder.tagline}</i></div>`));
   }
   
   const cylinder = el(`<div class="cylinder">
@@ -2159,7 +2160,11 @@ function runDuel(
 
     // Revive offer (Slice 7): player lost, token held or buyable, once/game.
     // Not in hell: a revive would replay the one-time sudden death.
-    if (result === "f" && !reviveUsed && mode !== "tutorial" && !hellRound) {
+    // Revive prompt (user 2026-11-02): standard mode only on the death that
+    // would lose the match (your 2nd lost round of the best-of-3), deathmatch
+    // on every death (one life). Never in the tutorial or in sudden death.
+    const matchOnTheLine = run ? true : series ? series.fWins + 1 >= FIRST_TO : false;
+    if (result === "f" && !reviveUsed && mode !== "tutorial" && !hellRound && matchOnTheLine) {
       offerRevive(() => {
         // accepted: same round, Focus restart, player 1HP + foe full (locked §6)
         cleanup();
@@ -2308,17 +2313,19 @@ function runDuel(
       .map((r, i) => `<i class="pip ${r === "p" ? "w" : "l"}" title="Round ${i + 1}">${r === "p" ? "W" : "L"}</i>`).join("");
     // Ladder card: the level in the kicker, the foe by name, NEXT on a win
     // (the last level: LEGEND + replay), REMATCH of the same level on a loss.
+    // Endless ladder: the last level of a stage opens the next stage at level 1.
     const lv = series?.level;
-    const last = lv !== undefined && lv >= LEVEL_COUNT - 1;
-    const next = lv !== undefined && !last ? LEVELS[lv + 1] : null;
-    const badge = !series?.cleared ? "" : last ? `<div class="rs-new">LADDER COMPLETE</div>` : `<div class="rs-new">LEVEL ${lv! + 2} UNLOCKED</div>`;
+    const last = lpos !== null && lpos.idx === LEVEL_COUNT - 1;
+    const next = lv !== undefined ? ladderLevel(lv + 1) : null;
+    const npos = lv !== undefined ? ladderPos(lv + 1) : null;
+    const badge = !series?.cleared || !npos ? "" : last ? `<div class="rs-new">STAGE ${npos.stage} UNLOCKED</div>` : `<div class="rs-new">LEVEL ${npos.idx + 1} UNLOCKED</div>`;
     const s = resultCard({
       won,
-      kicker: ladder ? `LEVEL ${lv! + 1} OF ${LEVEL_COUNT} · ${MAPS[mapId].name}` : `BEST OF ${BEST_OF} · ${MAPS[mapId].name}`,
+      kicker: ladder ? `STAGE ${lpos!.stage} · LEVEL ${lpos!.idx + 1} OF ${LEVEL_COUNT} · ${MAPS[mapId].name}` : `BEST OF ${BEST_OF} · ${MAPS[mapId].name}`,
       title: won ? (last ? "LEGEND!" : "VICTORY!") : "DEFEAT",
       line: won
         ? ladder
-          ? last ? "Ten duels, ten down. The West is yours." : `${titleCase(ladder.name)} is down. ${titleCase(next!.name)} is waiting.`
+          ? last ? `Ten duels, ten down. Stage ${npos!.stage}: they all ride back meaner.` : `${titleCase(ladder.name)} is down. ${titleCase(next!.name)} is waiting.`
           : pick(["Fastest gun in the West.", "Smoke clears. You're still standing.", "The town sleeps easy tonight."])
         : ladder
           ? `${titleCase(ladder.name)} still stands. ${pick(["Draw again.", "Dust off your hat.", "Not today, partner."])}`
@@ -2329,10 +2336,10 @@ function runDuel(
           <div class="rs-side foe"><span>${ladder ? ladder.name : "FOE"}</span><b>${series?.fWins ?? 0}</b></div>
         </div>${pips ? `<div class="rs-pips">${pips}</div>` : ""}${badge}`,
       gold: series?.gold ?? 0,
-      again: won && next ? `NEXT: LEVEL ${lv! + 2}` : won && ladder ? "PLAY AGAIN" : "REMATCH",
+      again: won && npos ? (last ? `NEXT: STAGE ${npos.stage}` : `NEXT: LEVEL ${npos.idx + 1}`) : "REMATCH",
     });
     s.querySelector("[data-b=again]")!.addEventListener("click", () =>
-      runSeries(root, adapter, mode, audio, won && next ? lv! + 1 : lv));
+      runSeries(root, adapter, mode, audio, won && lv !== undefined ? lv + 1 : lv));
   }
 
   function offerRevive(onAccept: () => void, onDecline: () => void): void {
