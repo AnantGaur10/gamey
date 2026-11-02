@@ -31,7 +31,7 @@ import { installUiSfx } from "./uiSfx";
 import { installRotatePrompt } from "./rotate";
 import { createTownsfolk, folkCount, type Townsfolk } from "../render/townsfolk";
 import { mountGunViews } from "./gunViewer";
-import { MENU_BED, mapBed } from "../audio/beds";
+import { MENU_BED, mapBed, hasWind } from "../audio/beds";
 import { initDeviceTier, deviceTier } from "../render/device";
 import { randomCowboyName, cleanName, escapeHtml, displayName, NAME_MAX } from "./names";
 
@@ -638,7 +638,8 @@ function runDuel(
   // per decided round), else the old per-round tiers (deathmatch, DEV).
   const ai = series?.level !== undefined ? levelAi(series.level, stageIdx) : AI_ROSTER[clamp(stageIdx, 0, AI_ROSTER.length - 1)];
   // Wind picks up as the day goes (noon breeze -> night gusts; hell roars).
-  audio.startWind((hellRound ? 0.8 : [0.45, 0.65, 0.85][Math.min(stageIdx, 2)]) * mapDef.wind, hellRound);
+  // Main Street / Telegraph Row: no wind, their townsfolk's boots instead.
+  audio.startWind(hasWind(mapId, hellRound) ? (hellRound ? 0.8 : [0.45, 0.65, 0.85][Math.min(stageIdx, 2)]) * mapDef.wind : 0, hellRound);
   // The map's bed (tune / ambience); a series' rounds keep it running.
   audio.setBed(mapBed(mapId, stageIdx, hellRound));
   audio.warmup(); // decode the gunshot before the first shot
@@ -868,7 +869,7 @@ function runDuel(
         // Pan + level from where the walker is, as the camera hears it.
         _ear.copy(world).applyMatrix4(camera.matrixWorldInverse);
         const d = _ear.length();
-        audio.playFootstep(Math.max(-1, Math.min(1, _ear.x / Math.max(4, -_ear.z))) * 0.9, 0.6 / (1 + d / 6), surface);
+        audio.playFootstep(Math.max(-1, Math.min(1, _ear.x / Math.max(4, -_ear.z))) * 0.9, 0.9 / (1 + d / 7), surface);
       },
     });
   }

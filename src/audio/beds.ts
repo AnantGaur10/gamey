@@ -24,3 +24,10 @@ export function mapBed(map: MapId, stage: number, hell: boolean): BedLayer[] {
       return [];
   }
 }
+
+/** Wind under the duel: none on Main Street / Telegraph Row (user 2026-11-02:
+    "i can hear wind on street maps, footsteps would do"); sudden death keeps
+    its roar everywhere. */
+export function hasWind(map: MapId, hell: boolean): boolean {
+  return hell || (map !== "street" && map !== "town");
+}
