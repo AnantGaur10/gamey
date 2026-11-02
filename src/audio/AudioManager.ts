@@ -1,4 +1,5 @@
 export type MusicTrack = 'home-screen' | 'duel';
+export type UiSfx = 'hover' | 'click' | 'confirm' | 'back';
 
 export interface AudioManager {
   playMusic(track: MusicTrack): Promise<void>;
@@ -12,6 +13,9 @@ export interface AudioManager {
   startWind(strength: number, hell?: boolean): void;
   stopWind(): void;
   playSFX(sfx: 'hit-body' | 'hit-head', volume?: number): Promise<void>;
+  /** Menu sounds (Web Audio synth on the SFX bus): hover = cylinder tick,
+   *  click = hammer cock, confirm = cock + spur ring, back = a duller cock. */
+  playUiSfx(kind: UiSfx): void;
   /** SETTINGS SFX level 0..1 (gunshots, wind, hit sounds). */
   setSfxVolume(v: number): void;
   muteForAd(): void;
@@ -354,6 +358,69 @@ export function createAudioManager(): AudioManager {
     }
   }
 
+  // --- UI: short metallic one-shots, no echo send (dry, close to the ear). --
+  /** A struck-metal ping: a sine/triangle partial with a fast exponential decay. */
+  function ping(ctx: AudioContext, dst: AudioNode, t: number, freq: number, peak: number, decay: number,
+                type: OscillatorType = 'sine'): void {
+    const o = ctx.createOscillator();
+    o.type = type;
+    o.frequency.value = freq;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.001);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+    o.connect(g);
+    g.connect(dst);
+    o.start(t);
+    o.stop(t + decay + 0.02);
+  }
+  /** One click of the action: a bright noise snap + a short metal ping. */
+  function metalClick(ctx: AudioContext, dst: AudioNode, t: number, bright: number, peak: number): void {
+    noiseHit(ctx, dst, t, 'bandpass', bright, 3, peak, 0.0008, 0.022);
+    ping(ctx, dst, t, bright * 0.62, peak * 0.35, 0.05, 'triangle');
+  }
+  let lastUi = 0;
+  function playUiSfx(kind: UiSfx): void {
+    try {
+      if (silent()) return;
+      // Hover never creates or wakes the context (no user gesture yet: Chrome
+      // would warn "AudioContext was not allowed to start"); a click may.
+      const ctx = kind === 'hover' ? audioContext : getAudioContext();
+      if (!ctx) return;
+      if (ctx.state !== 'running') {
+        if (kind === 'hover') return;
+        resumeAudioContext();
+      }
+      const now = ctx.currentTime;
+      if (kind === 'hover' && now - lastUi < 0.04) return; // sweeping across a row of buttons
+      lastUi = now;
+      const t = now + 0.003;
+      const voice = ctx.createGain();
+      voice.gain.value = 0.55;
+      voice.connect(bus(ctx));
+      const j = (k: number) => k * (0.96 + Math.random() * 0.08);
+      if (kind === 'hover') {
+        // The cylinder turning one notch: a tiny, high, dry tick.
+        noiseHit(ctx, voice, t, 'bandpass', j(4200), 5, 0.32, 0.0006, 0.018);
+        ping(ctx, voice, t, j(2900), 0.07, 0.03, 'triangle');
+      } else {
+        // Hammer back: two clicks ~50ms apart, the second (the sear) brighter.
+        const dull = kind === 'back';
+        metalClick(ctx, voice, t, j(dull ? 1500 : 2100), dull ? 0.32 : 0.42);
+        metalClick(ctx, voice, t + 0.052, j(dull ? 2400 : 3600), dull ? 0.38 : 0.5);
+        if (kind === 'confirm') {
+          // A spur's ring under it: two inharmonic partials, a slower decay.
+          ping(ctx, voice, t + 0.06, j(3150), 0.07, 0.32);
+          ping(ctx, voice, t + 0.06, j(4730), 0.04, 0.22);
+          ping(ctx, voice, t + 0.11, j(3480), 0.04, 0.26);
+        }
+      }
+      window.setTimeout(() => { try { voice.disconnect(); } catch { /* noop */ } }, 600);
+    } catch (err) {
+      log(`UI sfx error: ${err}`);
+    }
+  }
+
   async function playSFX(sfx: 'hit-body' | 'hit-head', volume: number = 0.8): Promise<void> {
     try {
       if (silent()) return;
@@ -436,6 +503,7 @@ export function createAudioManager(): AudioManager {
     startWind,
     stopWind,
     playSFX,
+    playUiSfx,
     setSfxVolume,
     muteForAd,
     unmuteAfterAd,

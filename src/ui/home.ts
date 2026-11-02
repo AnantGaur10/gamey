@@ -27,6 +27,7 @@ import { showMenuScene, hideMenuScene, menuMapId } from "./menuScene";
 import { storagePersisted } from "../store/SafeStore";
 import { needsTutorial, markTutorialSeen } from "../portal/firstLaunch";
 import { createAudioManager, HAS_MUSIC, type AudioManager } from "../audio/AudioManager";
+import { installUiSfx } from "./uiSfx";
 import { initDeviceTier, deviceTier } from "../render/device";
 import { randomCowboyName, cleanName, escapeHtml, displayName, NAME_MAX } from "./names";
 
@@ -76,6 +77,7 @@ export function boot(root: HTMLElement, adapter: PortalAdapter): void {
 
   // iOS audio context resume on user gesture (per CrazyGames specs)
   document.addEventListener("touchend", () => audio.resumeAudioContext());
+  installUiSfx(audio); // hover + click sounds on every button
 
   // Restore mute state from progress
   if (progress.settings.mute) {
