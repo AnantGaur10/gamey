@@ -28,6 +28,7 @@ import { storagePersisted } from "../store/SafeStore";
 import { needsTutorial, markTutorialSeen } from "../portal/firstLaunch";
 import { createAudioManager, HAS_MUSIC, type AudioManager } from "../audio/AudioManager";
 import { installUiSfx } from "./uiSfx";
+import { createTownsfolk, folkCount, type Townsfolk } from "../render/townsfolk";
 import { mountGunViews } from "./gunViewer";
 import { MENU_BED, mapBed } from "../audio/beds";
 import { initDeviceTier, deviceTier } from "../render/device";
@@ -840,11 +841,31 @@ function runDuel(
       s.setGlow(hellRound ? 1 : [0, 0.55, 1][Math.min(stageIdx, 2)]);
       scene.add(s.group);
       street = s;
+      startFolk(s.group);
     }));
   }
   // The other maps: the procedural street never shows (the recoloured arena
   // floor + sky hold until the set lands, ~instant once cached).
   let mapSet: MapSet | null = null;
+  // Townsfolk on Main Street / Telegraph Row (render/townsfolk.ts): walkers +
+  // their boots, once the set is in. None in hell, fewer at night / low tiers.
+  let folk: Townsfolk | null = null;
+  const _ear = new THREE.Vector3();
+  function startFolk(setGroup: THREE.Object3D): void {
+    const root = setGroup.children[0];
+    const t = deviceTier();
+    const n = folkCount(mapId, stageIdx, hellRound, adapter.loadProgress().settings.quality === "low", t.lowMemory, t.saveData);
+    if (!root || !n || folk) return;
+    folk = createTownsfolk({
+      map: mapId, root, distM, count: n, exclude: [foeLook.id],
+      onStep(world, surface) {
+        // Pan + level from where the walker is, as the camera hears it.
+        _ear.copy(world).applyMatrix4(camera.matrixWorldInverse);
+        const d = _ear.length();
+        audio.playFootstep(Math.max(-1, Math.min(1, _ear.x / Math.max(4, -_ear.z))) * 0.9, 0.6 / (1 + d / 6), surface);
+      },
+    });
+  }
   function lookMapSet(s: MapSet, stage: number, hell: boolean): void {
     const k = Math.min(stage, 2);
     s.setHell(hell);
@@ -867,6 +888,7 @@ function runDuel(
       if (!alive) { s.dispose(); return; }
       scene.add(s.group);
       mapSet = s;
+      startFolk(s.group);
     }));
   }
   // Cold visit (2026-10-23): a first-time player (fresh browser) got the
@@ -2405,6 +2427,7 @@ function runDuel(
     machine.phase = "fire";
     ammo -= 1;
     audio.playGunshot(0.85);
+    folk?.hurry(); // shots: the street clears
     paintBars();
     coach?.step("shot", ammo);
 
@@ -2462,6 +2485,7 @@ function runDuel(
       foeFired = true;
       gunsmoke.spawn(muzzle, nightBlind); // night: the flash is the only giveaway, so it carries
       audio.playGunshot(0.6, distM); // the foe's shot, down the street: pitch + bass by distance
+      folk?.hurry();
       foeKickT = 0; // procedural shooting anim: gun-kick decay in frame loop
       const lethal = bodyDamage(GUNS.default.baseDamage, distM) >= playerHP;
       const b = sim.fire({ from: muzzle, dir, distM, shooter: "foe", gunId: "default", lethal });
@@ -2778,6 +2802,7 @@ function runDuel(
     pauseEl?.remove();
     pauseBtn.remove();
     stopGameplay();
+    try { folk?.dispose(); } catch { /* noop */ }
     audio.stopWind();
     document.body.classList.remove("in-duel");
     document.body.style.background = "";
@@ -2979,6 +3004,7 @@ function runDuel(
     qteFrameMs = performance.now();
     try { (player as unknown as CowboyGlb).update?.(dt); } catch { /* noop */ }
     try { (foe as unknown as CowboyGlb).update?.(dt); } catch { /* noop */ }
+    try { folk?.tick(dt); } catch { /* scenery only */ }
     // idle sway (procedural no-op path mirrors Blender idle clip) with a
     // hit-jerk dip composed on top (procedural hit anim, 0.35s).
     swayT += dt;

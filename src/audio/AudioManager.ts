@@ -76,8 +76,17 @@ export function createAudioManager(): AudioManager {
    *  context created before that starts suspended and Chrome logs "The
    *  AudioContext was not allowed to start". */
   function gestured(): boolean {
-    const ua = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation;
-    return ua ? ua.hasBeenActive : true;
+    const nav = navigator as Navigator & {
+      userActivation?: { hasBeenActive: boolean };
+      getAutoplayPolicy?: (type: 'audiocontext') => 'allowed' | 'allowed-muted' | 'disallowed';
+    };
+    // Sound before the first click: only where the browser says it may (an
+    // iframe whose host page delegates autoplay, user 2026-11-02: the menu
+    // tune waited for a click). Everywhere else the first gesture starts it.
+    try {
+      if (nav.getAutoplayPolicy?.('audiocontext') === 'allowed') return true;
+    } catch { /* older browsers */ }
+    return nav.userActivation ? nav.userActivation.hasBeenActive : true;
   }
 
   function getAudioContext(): AudioContext | null {
