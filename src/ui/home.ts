@@ -18,7 +18,7 @@ import { GUNS, AI_ROSTER, GOLD_WIN_BESTOF, GOLD_WIN_DEATHMATCH, GOLD_LOSS_CONSOL
 import { LEVELS, LEVEL_COUNT, playableLevel, levelAi, levelClearGold } from "../game/levels";
 import { ProjectileSim, testCapsuleHit, predictHit, CAPSULE_FOR_POSE, capsuleMid, DEFAULT_HAT, type BulletState } from "../game/projectiles";
 import { LocalTransport } from "../game/Transport";
-import type { PortalAdapter } from "../portal/PortalAdapter";
+import type { PortalAdapter, Progress } from "../portal/PortalAdapter";
 import { mountFocusUI, isCoarsePointer, type FocusUI } from "./focus";
 import { mountCoach, type Coach } from "./coach";
 import { TimingQte } from "../game/timingQte";
@@ -194,6 +194,32 @@ const SPEAKER_OFF = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4
 const COIN_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#e8b43a" stroke="#6b4a10" stroke-width="1.6"/><circle cx="12" cy="12" r="7" fill="none" stroke="#8a6414" stroke-width="1.2"/><path d="M12 7.2l1.4 2.9 3.2.4-2.3 2.2.6 3.2L12 14.4l-2.9 1.5.6-3.2-2.3-2.2 3.2-.4z" fill="#8a6414"/></svg>`;
 const STAR_ICON = `<svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="30" fill="#2b1a10" stroke="#d4af37" stroke-width="3"/><path d="M32 8l6.2 13.4 14.7 1.7-10.9 10 2.9 14.5L32 40.3l-12.9 7.3 2.9-14.5-10.9-10 14.7-1.7z" fill="#ffd678" stroke="#8a6414" stroke-width="2" stroke-linejoin="round"/><g fill="#ffd678" stroke="#8a6414" stroke-width="1.5"><circle cx="32" cy="8" r="3"/><circle cx="52.9" cy="23.1" r="3"/><circle cx="44.9" cy="47.6" r="3"/><circle cx="19.1" cy="47.6" r="3"/><circle cx="11.1" cy="23.1" r="3"/></g></svg>`;
 
+/** SOUND FX + MUSIC sliders (SETTINGS and the duel's pause menu). */
+function volumeRows(prog: Progress): string {
+  const pct = (v: number | undefined) => Math.round((v ?? 1) * 100);
+  const row = (label: string, key: "sfx" | "music") =>
+    `<label class="setrow"><span class="setlbl">${label}</span><input type="range" min="0" max="100" step="5" data-s="${key}" value="${pct(prog.settings[key])}"><em>${pct(prog.settings[key])}%</em></label>`;
+  return row("SOUND FX", "sfx") + (HAS_MUSIC ? row("MUSIC", "music") : "");
+}
+function wireVolumeRows(box: HTMLElement, adapter: PortalAdapter, audio: AudioManager): void {
+  box.querySelectorAll<HTMLInputElement>("input[type=range][data-s]").forEach((r) => {
+    const key = r.dataset.s as "sfx" | "music";
+    const out = r.parentElement!.querySelector("em")!;
+    r.addEventListener("input", () => {
+      const v = Number(r.value) / 100;
+      out.textContent = `${r.value}%`;
+      if (key === "sfx") audio.setSfxVolume(v);
+      else audio.setMusicVolume(MUSIC_BASE * v);
+    });
+    r.addEventListener("change", () => {
+      const p = adapter.loadProgress();
+      p.settings[key] = Number(r.value) / 100;
+      adapter.saveProgress(p);
+      if (key === "sfx") { audio.resumeAudioContext(); audio.playGunshot(0.5); } // a sample at the new level
+    });
+  });
+}
+
 export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: AudioManager): void {
   audio.setBed(MENU_BED);
   root.innerHTML = "";
@@ -286,8 +312,7 @@ function showSettings(root: HTMLElement, adapter: PortalAdapter, audio: AudioMan
     <h2>SETTINGS</h2>
     <div class="setpanel">
       <div class="setrow"><span class="setlbl">NAME</span><div class="setname"></div></div>
-      <label class="setrow"><span class="setlbl">SOUND FX</span><input type="range" min="0" max="100" step="5" data-s="sfx" value="${pct(prog.settings.sfx)}"><em>${pct(prog.settings.sfx)}%</em></label>
-      ${HAS_MUSIC ? `<label class="setrow"><span class="setlbl">MUSIC</span><input type="range" min="0" max="100" step="5" data-s="music" value="${pct(prog.settings.music)}"><em>${pct(prog.settings.music)}%</em></label>` : ""}
+      ${volumeRows(prog)}
       <div class="setrow"><span class="setlbl">GRAPHICS</span><div class="setseg">
         <button data-q="high" aria-pressed="${prog.settings.quality !== "low"}">HIGH</button>
         <button data-q="low" aria-pressed="${prog.settings.quality === "low"}">LOW</button>
@@ -332,22 +357,7 @@ function showSettings(root: HTMLElement, adapter: PortalAdapter, audio: AudioMan
   paintName();
   page.addEventListener("userchange", paintName);
 
-  page.querySelectorAll<HTMLInputElement>("input[type=range]").forEach((r) => {
-    const key = r.dataset.s as "sfx" | "music";
-    const out = r.parentElement!.querySelector("em")!;
-    r.addEventListener("input", () => {
-      const v = Number(r.value) / 100;
-      out.textContent = `${r.value}%`;
-      if (key === "sfx") audio.setSfxVolume(v);
-      else audio.setMusicVolume(MUSIC_BASE * v);
-    });
-    r.addEventListener("change", () => {
-      const p = adapter.loadProgress();
-      p.settings[key] = Number(r.value) / 100;
-      adapter.saveProgress(p);
-      if (key === "sfx") { audio.resumeAudioContext(); audio.playGunshot(0.5); } // a sample at the new level
-    });
-  });
+  wireVolumeRows(page, adapter, audio);
 
   const seg = Array.from(page.querySelectorAll<HTMLButtonElement>("[data-q]"));
   seg.forEach((b) => b.addEventListener("click", () => {
@@ -1610,6 +1620,20 @@ function runDuel(
   let playerFallVariant = "fall_fwd";
   let foeFallVariant = "fall_back";
   let foeTimers: number[] = [];
+  // Foe shots run on wall-clock timers: the pause menu holds them and
+  // re-arms the rest of each delay on RESUME.
+  const foePending = new Map<number, { fn: () => void; due: number }>();
+  function foeAfter(fn: () => void, ms: number): void {
+    const id = window.setTimeout(() => { foePending.delete(id); fn(); }, ms);
+    foePending.set(id, { fn, due: performance.now() + ms });
+    foeTimers.push(id);
+  }
+  function holdFoeTimers(): Array<{ fn: () => void; left: number }> {
+    const now = performance.now();
+    const held = [...foePending.entries()].map(([id, t]) => { window.clearTimeout(id); return { fn: t.fn, left: Math.max(0, t.due - now) }; });
+    foePending.clear();
+    return held;
+  }
   const aimWorld = stage.player.clone().lerp(stage.foe, 0.4).setY(0.2);
   // aimTarget takes instant pointer input; aimWorld glides toward it every
   // frame, so the crosshair + gun never snap — not at DRAW, not while
@@ -2056,6 +2080,7 @@ function runDuel(
 
   function endRound(text: string, subText: string, result: "p" | "f" | "draw", toHell = false): void {
     stopGameplay();
+    pauseBtn.style.display = "none"; // nothing to pause on the result card
     coach?.hide();
     if (mode === "tutorial" && result === "p") markTutorialDone();
     // Round over: hand back the OS cursor. The crosshair freezes once the
@@ -2441,10 +2466,10 @@ function runDuel(
         transport.send({ type: "Fire", tick: machine.tick, pos: [muzzle.x, muzzle.y, muzzle.z], dir: [dir.x, dir.y, dir.z], gunId: "default" });
       }
       if (shots < maxShots) {
-        foeTimers.push(window.setTimeout(shootOnce, GUNS.default.cooldownMs + 150 + Math.random() * 350));
+        foeAfter(shootOnce, GUNS.default.cooldownMs + 150 + Math.random() * 350);
       }
     };
-    foeTimers.push(window.setTimeout(shootOnce, reaction));
+    foeAfter(shootOnce, reaction);
   }
 
   /** Per-substep projectile integration + capsule collision.
@@ -2532,6 +2557,7 @@ function runDuel(
     qte.setSize(k);
   }
   function qtePress(): void {
+    if (userPaused) return;
     if (machine.phase !== "focus" || machine.paused) return;
     const res = qte.press(qteExtra());
     if (!res) return; // still showing the last result
@@ -2591,7 +2617,7 @@ function runDuel(
 
   const onPointerDown = (e: PointerEvent) => {
     const t = e.target as HTMLElement;
-    if (t.closest?.("button")) return;
+    if (userPaused || t.closest?.("button, .pausemenu")) return;
     const zx = e.clientX;
     const zy = e.clientY;
     const touch = e.pointerType !== "mouse";
@@ -2682,8 +2708,71 @@ function runDuel(
   root.addEventListener("pointerup", onPointerUp);
   root.addEventListener("pointercancel", onPointerUp);
 
+  // Pause (user 2026-11-02). Not Esc: on CrazyGames Esc leaves fullscreen
+  // (specs/crazygames/quality-guidelines.md), so P or the HUD button. Freezes
+  // the duel (fixed clock, foe timers, input), closes the SDK gameplay pair,
+  // and pauses on its own when the tab is hidden.
+  let userPaused = false;
+  let pauseEl: HTMLElement | null = null;
+  let heldFoe: Array<{ fn: () => void; left: number }> = [];
+  let gameplayWasOn = false;
+  const pauseBtn = el(`<button class="pause-btn" title="Pause (P)" aria-label="Pause"><i></i><i></i></button>`);
+  root.appendChild(pauseBtn);
+  pauseBtn.addEventListener("click", () => setPaused(true));
+  function setPaused(on: boolean): void {
+    if (on === userPaused || !alive) return;
+    if (on && (roundOver || loading)) return;
+    userPaused = on;
+    if (on) {
+      heldFoe = holdFoeTimers();
+      gameplayWasOn = gameplayOn;
+      stopGameplay();
+      document.body.classList.remove("in-duel"); // the OS cursor back for the menu
+      pauseBtn.style.display = "none";
+      const leave = mode === "tutorial" ? "SKIP TUTORIAL" : "LEAVE DUEL";
+      pauseEl = el(`<div class="settings pausemenu">
+        <h2>PAUSED</h2>
+        <div class="setpanel">${volumeRows(adapter.loadProgress())}</div>
+        <div class="namebtns">
+          <button class="namebtn primary" data-p="resume">RESUME</button>
+          <button class="namebtn" data-p="leave">${leave}</button>
+        </div>
+        <p class="setcredit">${mode === "tutorial" ? "You can replay it from HOW TO PLAY." : "Leaving ends this match: no gold for it."} Press P to resume.</p>
+      </div>`);
+      root.appendChild(pauseEl);
+      wireVolumeRows(pauseEl, adapter, audio);
+      pauseEl.querySelector("[data-p=resume]")!.addEventListener("click", () => setPaused(false));
+      pauseEl.querySelector("[data-p=leave]")!.addEventListener("click", () => {
+        if (mode === "tutorial" && skip) { setPaused(false); skip.querySelector("button")?.click(); return; }
+        cleanup();
+        showHome(root, adapter, audio);
+      });
+      return;
+    }
+    pauseEl?.remove();
+    pauseEl = null;
+    pauseBtn.style.display = "";
+    document.body.classList.add("in-duel");
+    for (const t of heldFoe) foeAfter(t.fn, t.left);
+    heldFoe = [];
+    if (gameplayWasOn) startGameplay();
+  }
+  const onPauseKey = (e: KeyboardEvent): void => {
+    if (e.code !== "KeyP" || e.repeat) return;
+    if ((e.target as HTMLElement | null)?.closest?.("input[type=text]")) return;
+    e.preventDefault();
+    setPaused(!userPaused);
+  };
+  window.addEventListener("keydown", onPauseKey);
+  const onHidden = (): void => { if (document.hidden) setPaused(true); };
+  document.addEventListener("visibilitychange", onHidden);
+
   function cleanup(): void {
     alive = false;
+    window.removeEventListener("keydown", onPauseKey);
+    document.removeEventListener("visibilitychange", onHidden);
+    pauseEl?.remove();
+    pauseBtn.remove();
     stopGameplay();
     audio.stopWind();
     document.body.classList.remove("in-duel");
@@ -2823,6 +2912,11 @@ function runDuel(
     if (!alive) return;
     raf = requestAnimationFrame(frame);
     tickLoading();
+    if (userPaused) {
+      clock.getDelta(); // the paused time never reaches the fixed clock
+      render();
+      return;
+    }
     const rawDt = clock.getDelta();
     const dt = Math.min(rawDt, 0.1);
     // Watchdog on WALL time: the clamped dt hid 300ms frames as 100ms and
