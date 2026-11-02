@@ -67,7 +67,7 @@ test('a ladder loss at stage 2 level 3 falls back 5 levels to stage 1 level 8', 
   await page.evaluate(() => {
     const p = JSON.parse(localStorage.getItem('gamey.v1') ?? '{}');
     p.level = 12; // stage 2 level 3
-    p.gold = 0; p.reviveToken = 0; // nothing to revive with: the loss is final at once
+    p.gold = 0; p.reviveToken = 0; // nothing to revive with: still asked, the revive button greyed
     localStorage.setItem('gamey.v1', JSON.stringify(p));
   });
   await page.reload();
@@ -78,6 +78,9 @@ test('a ladder loss at stage 2 level 3 falls back 5 levels to stage 1 level 8', 
   const died = await dieInRound(page, 2);
   console.log(`[revive-spec] died at stage 2 level 3: ${died}`);
   if (died) {
+    await expect(page.locator('[data-r=yes]')).toBeDisabled({ timeout: 8000 });
+    await expect(page.locator('.rv-stake')).toContainText('STAGE 1 · LEVEL 8');
+    await page.click('[data-r=no]');
     await expect(page.locator('.rs-new.lost')).toContainText('STAGE 1 · LEVEL 8', { timeout: 15000 });
     await expect(page.locator('[data-b=again]')).toContainText('PLAY: STAGE 1 · LEVEL 8');
   }

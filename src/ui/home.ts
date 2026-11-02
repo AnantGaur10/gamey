@@ -2381,20 +2381,24 @@ function runDuel(
     const price = reviveDeathPrice(SHOP_PRICES.revive);
     const hasToken = p.reviveToken >= 1;
     const canBuy = p.gold >= price;
-    if (!hasToken && !canBuy && !adapter.adsEnabled) { onDecline(); return; }
+    // Always asked when the match is on the line (user 2026-11-02: "its not
+    // asking me for revive"; it used to skip silently with no token and too
+    // little gold, which after the 500g token price was nearly always). Can't
+    // pay: the revive button shows greyed with the price, the stakes stay.
     // Revive card (user 2026-10-14 revamp). Every button the same size, font
     // and colour (CrazyGames: a no-ad choice must match the ad one). The bar
     // shows the auto "stay down" (bots + QA never click it).
     const yes = hasToken
       ? `<button class="rv-btn" data-r="yes">${AID_KIT_ICON}USE TOKEN</button>`
-      : canBuy ? `<button class="rv-btn" data-r="yes">${COIN_ICON}REVIVE · ${price}g</button>` : "";
+      : canBuy ? `<button class="rv-btn" data-r="yes">${COIN_ICON}REVIVE · ${price}g</button>`
+      : `<button class="rv-btn poor" data-r="yes" disabled>${COIN_ICON}REVIVE · ${price}g</button>`;
     const ov = el(`<div class="revive">
       <div class="rv-card">
         <span class="rv-badge">${AID_KIT_ICON}</span>
         <div class="rv-title">REVIVE?</div>
         <div class="rv-sub">Get back up with 1 HP: same round, fresh aim.</div>
         ${series?.level !== undefined ? `<div class="rv-stake">Stay down and you fall back to ${ladderLabel(knockedBack(series.level))}</div>` : ""}
-        <div class="rv-meta">${hasToken ? "Uses your revive token · once per game" : canBuy ? `No token · emergency price ${price}g · you have ${p.gold}g` : "No token"}</div>
+        <div class="rv-meta">${hasToken ? "Uses your revive token · once per game" : canBuy ? `No token · emergency price ${price}g · you have ${p.gold}g` : `No token · need ${price}g · you have ${p.gold}g (tokens: ARMORY)`}</div>
         <div class="rv-btns">${yes}${adapter.adsEnabled ? `<button class="rv-btn" data-r="ad">WATCH AD</button>` : ""}<button class="rv-btn" data-r="no">STAY DOWN</button></div>
         <div class="rv-timer"><i style="animation-duration:${REVIVE_WAIT_MS}ms"></i></div>
       </div>
