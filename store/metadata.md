@@ -59,11 +59,11 @@ Desktop:
 - Mouse: aim
 - Left click: fire
 
-Touch:
-- Tap the HOLSTER box to start the countdown
-- Tap anywhere: stop the Focus marker on the gold arc
-- Drag: aim
-- Quick tap: fire
+Touch (landscape, two thumbs):
+- Left thumb: hold the HOLSTER box to start the countdown (lifting it restarts the countdown)
+- Right thumb: tap the pad to stop the Focus marker on the gold arc
+- Left thumb: drag to aim after DRAW!
+- Right thumb: press SHOOT to fire
 
 ## Notes for the portal form
 
@@ -71,6 +71,7 @@ Touch:
   through the CrazyGames Data module when the SDK loads, and falls back to
   local storage otherwise.
 - No ads in Basic Launch (`ADS_ENABLED=false`).
+- CrazyGames muting audio through SDK: yes.
 - English only.
 - Orientation: landscape (plays on desktop and mobile; mobile viewport
   tested down to 800x450).

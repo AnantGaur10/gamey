@@ -87,5 +87,5 @@ AGENTS.md holds the project rules (single SDK build, adapter gating, git workflo
 - Shop prices (100/120/50) and best-of-3 are NOT user-locked.
 
 ## Known drift / open items
-- Music and preview videos are not made (covers + metadata: `store/`) (only files in `public/assets/music` are ever requested: `__MUSIC_FILES__` from `vite.config.ts`) (gunshots + wind are Web Audio synth in `AudioManager`, `context/2026-10-05.md` §15; hit SFX files still missing).
+- Music and preview videos are not made (covers + metadata: `store/`) (only files in `public/assets/music` are ever requested: `__MUSIC_FILES__` from `vite.config.ts`; the folder doesn't exist until music lands, notes in `store/music-notes.md`; SETTINGS shows the MUSIC slider only when a track ships) (gunshots + wind are Web Audio synth in `AudioManager`, `context/2026-10-05.md` §15; hit SFX files still missing).
 - `context/2026-10-01.md` is referenced but missing.

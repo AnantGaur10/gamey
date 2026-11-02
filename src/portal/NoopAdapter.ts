@@ -16,6 +16,8 @@ export function createNoopAdapter(): PortalAdapter {
     gameplayStop() {},
     loadingStart() {},
     loadingStop() {},
+    portalMuted: false,
+    onPortalMuteChange() {},
     async requestMidgame() {
       return false;
     },

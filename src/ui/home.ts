@@ -26,7 +26,7 @@ import { quickDraw, gunOut, QD_END } from "../render/quickDraw";
 import { showMenuScene, hideMenuScene, menuMapId } from "./menuScene";
 import { storagePersisted } from "../store/SafeStore";
 import { needsTutorial, markTutorialSeen } from "../portal/firstLaunch";
-import { createAudioManager, type AudioManager } from "../audio/AudioManager";
+import { createAudioManager, HAS_MUSIC, type AudioManager } from "../audio/AudioManager";
 import { initDeviceTier, deviceTier } from "../render/device";
 import { randomCowboyName, cleanName, escapeHtml, displayName, NAME_MAX } from "./names";
 
@@ -81,6 +81,12 @@ export function boot(root: HTMLElement, adapter: PortalAdapter): void {
   if (progress.settings.mute) {
     audio.toggleMute();
   }
+  // The site's mute setting outranks ours, and can change while we run.
+  audio.setPortalMuted(adapter.portalMuted);
+  adapter.onPortalMuteChange((m) => {
+    audio.setPortalMuted(m);
+    root.querySelector(".mute-btn")?.dispatchEvent(new Event("mutechange"));
+  });
   // SETTINGS (user 2026-10-23): volumes + low graphics, before the first canvas.
   audio.setSfxVolume(progress.settings.sfx ?? 1);
   audio.setMusicVolume(MUSIC_BASE * (progress.settings.music ?? 1));
@@ -228,6 +234,7 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
     muteBtn.classList.toggle("off", audio.isMuted());
   };
   paintMute();
+  muteBtn.addEventListener("mutechange", paintMute);
   menu.querySelector(".chip.pname")!.addEventListener("click", () => showSettings(root, adapter, audio));
   muteBtn.addEventListener("click", () => {
     const p = adapter.loadProgress();
@@ -274,7 +281,7 @@ function showSettings(root: HTMLElement, adapter: PortalAdapter, audio: AudioMan
     <div class="setpanel">
       <div class="setrow"><span class="setlbl">NAME</span><div class="setname"></div></div>
       <label class="setrow"><span class="setlbl">SOUND FX</span><input type="range" min="0" max="100" step="5" data-s="sfx" value="${pct(prog.settings.sfx)}"><em>${pct(prog.settings.sfx)}%</em></label>
-      <label class="setrow"><span class="setlbl">MUSIC</span><input type="range" min="0" max="100" step="5" data-s="music" value="${pct(prog.settings.music)}"><em>${pct(prog.settings.music)}%</em></label>
+      ${HAS_MUSIC ? `<label class="setrow"><span class="setlbl">MUSIC</span><input type="range" min="0" max="100" step="5" data-s="music" value="${pct(prog.settings.music)}"><em>${pct(prog.settings.music)}%</em></label>` : ""}
       <div class="setrow"><span class="setlbl">GRAPHICS</span><div class="setseg">
         <button data-q="high" aria-pressed="${prog.settings.quality !== "low"}">HIGH</button>
         <button data-q="low" aria-pressed="${prog.settings.quality === "low"}">LOW</button>
@@ -912,6 +919,20 @@ function runDuel(
   // (the left thumb drags the crosshair; a tap anywhere else never fires).
   const pad = el(`<div class="tpad"><b>TAP</b><small>right thumb</small></div>`);
   if (coarse) root.appendChild(pad);
+
+  // The SDK's Start/Stop pair: every way out of a duel (round end, SKIP during
+  // Focus) closes it exactly once.
+  let gameplayOn = false;
+  const startGameplay = (): void => {
+    if (gameplayOn) return;
+    gameplayOn = true;
+    adapter.gameplayStart();
+  };
+  const stopGameplay = (): void => {
+    if (!gameplayOn) return;
+    gameplayOn = false;
+    adapter.gameplayStop();
+  };
 
   let skip: HTMLElement | null = null;
   // Tutorial coach (src/ui/coach.ts): step cards beside the holster zone,
@@ -1742,7 +1763,7 @@ function runDuel(
     // until DRAW (user 2026-10-26).
     cross.style.display = focusByTouch ? "none" : "block";
     cross.classList.add("focusing");
-    adapter.gameplayStart();
+    startGameplay();
     coach?.step("focus");
   }
 
@@ -2024,7 +2045,7 @@ function runDuel(
   }
 
   function endRound(text: string, subText: string, result: "p" | "f" | "draw", toHell = false): void {
-    adapter.gameplayStop();
+    stopGameplay();
     coach?.hide();
     if (mode === "tutorial" && result === "p") markTutorialDone();
     // Round over: hand back the OS cursor. The crosshair freezes once the
@@ -2653,6 +2674,7 @@ function runDuel(
 
   function cleanup(): void {
     alive = false;
+    stopGameplay();
     audio.stopWind();
     document.body.classList.remove("in-duel");
     document.body.style.background = "";

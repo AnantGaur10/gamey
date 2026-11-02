@@ -53,6 +53,9 @@ export interface PortalAdapter {
   gameplayStop(): void;
   loadingStart(): void;
   loadingStop(): void;
+  /** The portal's mute setting (CrazyGames `muteAudio`). False without the SDK. */
+  readonly portalMuted: boolean;
+  onPortalMuteChange(cb: (muted: boolean) => void): void;
   /** Midgame/break ad. Resolves true if an ad played, false on no-fill. Never rejects, never blocks. */
   requestMidgame(): Promise<boolean>;
   /** Rewarded ad. Resolves true only on adFinished; false on adError/no-fill. Never rejects. */

@@ -13,7 +13,14 @@ interface CgUser { username: string; profilePictureUrl?: string }
 interface CgSdk {
   init(): Promise<void>;
   environment: "crazygames" | "local" | "disabled";
-  game: { gameplayStart(): void; gameplayStop(): void; loadingStart(): void; loadingStop(): void };
+  game: {
+    gameplayStart(): void;
+    gameplayStop(): void;
+    loadingStart(): void;
+    loadingStop(): void;
+    settings?: { muteAudio?: boolean };
+    addSettingsChangeListener?(cb: () => void): void;
+  };
   ad: {
     requestAd(type: "midgame" | "rewarded", cb: { adStarted?: () => void; adFinished?: () => void; adError?: (e: { code?: string }) => void }): void;
   };
@@ -135,6 +142,15 @@ export function createCrazyGamesAdapter(): PortalAdapter {
     gameplayStop() { safe((s) => s.game.gameplayStop(), () => noop.gameplayStop()); },
     loadingStart() { safe((s) => s.game.loadingStart(), () => noop.loadingStart()); },
     loadingStop() { safe((s) => s.game.loadingStop(), () => noop.loadingStop()); },
+    get portalMuted() { return sdk?.game.settings?.muteAudio === true; },
+    onPortalMuteChange(cb: (muted: boolean) => void) {
+      try {
+        const s = sdk;
+        s?.game.addSettingsChangeListener?.(() => cb(s.game.settings?.muteAudio === true));
+      } catch (err) {
+        if (import.meta.env.DEV) console.warn("[gamey] addSettingsChangeListener failed", err);
+      }
+    },
     requestMidgame: () => request("midgame"),
     requestRewarded: (_placement: string) => request("rewarded"),
     loadProgress(): Progress {

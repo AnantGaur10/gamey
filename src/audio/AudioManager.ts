@@ -16,8 +16,12 @@ export interface AudioManager {
   setSfxVolume(v: number): void;
   muteForAd(): void;
   unmuteAfterAd(): void;
+  /** The player's own mute; returns their choice, unchanged while the site mutes us. */
   toggleMute(): boolean;
+  /** Silent for any reason, the player's mute or the site's. */
   isMuted(): boolean;
+  /** The site's mute setting (SDK muteAudio): wins over the player's choice. */
+  setPortalMuted(m: boolean): void;
   resumeAudioContext(): void;
 }
 
@@ -27,9 +31,14 @@ function log(...args: unknown[]): void {
   if (import.meta.env.DEV) console.log(...args);
 }
 
+/** Tracks that ship. Hit sounds live in the same folder and don't count. */
+export const HAS_MUSIC = __MUSIC_FILES__.some((f) => f === 'home-screen.mp3' || f === 'duel.mp3');
+
 export function createAudioManager(): AudioManager {
   let audioContext: AudioContext | null = null;
-  let muted = false;
+  let playerMuted = false;
+  let portalMuted = false;
+  const silent = (): boolean => playerMuted || portalMuted;
   let currentMusic: HTMLAudioElement | null = null;
   let musicVolume = 0.5;
   let sfxVolume = 1; // SETTINGS SFX level (synth bus gain + hit sounds)
@@ -73,7 +82,7 @@ export function createAudioManager(): AudioManager {
       if (!url) return null;
       const audio = new Audio(url);
       audio.loop = true;
-      audio.volume = muted ? 0 : musicVolume;
+      audio.volume = silent() ? 0 : musicVolume;
 
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
@@ -112,7 +121,7 @@ export function createAudioManager(): AudioManager {
       }
 
       currentMusic = audio;
-      if (!muted) {
+      if (!silent()) {
         audio.play().catch((err) => {
           log(`Failed to play music: ${err}`);
         });
@@ -133,7 +142,7 @@ export function createAudioManager(): AudioManager {
   function setMusicVolume(v: number): void {
     musicVolume = Math.max(0, Math.min(1, v));
     if (currentMusic) {
-      currentMusic.volume = muted ? 0 : musicVolume;
+      currentMusic.volume = silent() ? 0 : musicVolume;
     }
   }
 
@@ -145,7 +154,7 @@ export function createAudioManager(): AudioManager {
   function bus(ctx: AudioContext): GainNode {
     if (!sfxBus) {
       sfxBus = ctx.createGain();
-      sfxBus.gain.value = muted ? 0 : sfxVolume;
+      sfxBus.gain.value = silent() ? 0 : sfxVolume;
       sfxBus.connect(ctx.destination);
     }
     return sfxBus;
@@ -230,7 +239,7 @@ export function createAudioManager(): AudioManager {
 
   function playGunshotSynth(volume: number = 0.85, far = false): void {
     try {
-      if (muted) return;
+      if (silent()) return;
       const ctx = getAudioContext();
       if (!ctx) return;
       const t = ctx.currentTime + 0.005;
@@ -347,7 +356,7 @@ export function createAudioManager(): AudioManager {
 
   async function playSFX(sfx: 'hit-body' | 'hit-head', volume: number = 0.8): Promise<void> {
     try {
-      if (muted) return;
+      if (silent()) return;
 
       const filename = sfx === 'hit-body' ? 'hit-body.mp3' : 'hit-head.mp3';
       const url = resolveMusicUrl(filename);
@@ -369,7 +378,7 @@ export function createAudioManager(): AudioManager {
 
   function setSfxVolume(v: number): void {
     sfxVolume = Math.max(0, Math.min(1, v));
-    if (!muted) setBus(true);
+    if (!silent()) setBus(true);
   }
 
   function muteForAd(): void {
@@ -381,7 +390,7 @@ export function createAudioManager(): AudioManager {
   }
 
   function unmuteAfterAd(): void {
-    if (!muted) setBus(true);
+    if (!silent()) setBus(true);
     if (wasPlayingBeforeAd && currentMusic) {
       currentMusic.play().catch((err) => {
         log('Failed to resume music after ad:', err);
@@ -389,26 +398,34 @@ export function createAudioManager(): AudioManager {
     }
   }
 
-  function toggleMute(): boolean {
-    muted = !muted;
-    setBus(!muted);
-
-    if (currentMusic) {
-      if (muted) {
-        currentMusic.pause();
-      } else {
-        currentMusic.volume = musicVolume;
-        currentMusic.play().catch((err) => {
-          log('Failed to resume music:', err);
-        });
-      }
+  function applyMute(): void {
+    setBus(!silent());
+    if (!currentMusic) return;
+    if (silent()) {
+      currentMusic.pause();
+    } else {
+      currentMusic.volume = musicVolume;
+      currentMusic.play().catch((err) => {
+        log('Failed to resume music:', err);
+      });
     }
+  }
 
-    return muted;
+  function toggleMute(): boolean {
+    if (portalMuted) return playerMuted; // the speaker button can't override the site
+    playerMuted = !playerMuted;
+    applyMute();
+    return playerMuted;
+  }
+
+  function setPortalMuted(m: boolean): void {
+    if (m === portalMuted) return;
+    portalMuted = m;
+    applyMute();
   }
 
   function isMuted(): boolean {
-    return muted;
+    return silent();
   }
 
   return {
@@ -424,6 +441,7 @@ export function createAudioManager(): AudioManager {
     unmuteAfterAd,
     toggleMute,
     isMuted,
+    setPortalMuted,
     resumeAudioContext,
   };
 }

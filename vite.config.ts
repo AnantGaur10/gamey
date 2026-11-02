@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs";
+import { readdirSync, renameSync } from "node:fs";
 import { defineConfig, type Plugin } from "vite";
 import type { OutputChunk } from "rollup";
 
@@ -32,6 +32,18 @@ function preloadGameChunks(): Plugin {
   };
 }
 
+/** Dev keeps basic.html (index.html is the forwarding page there); the
+    uploaded build has the index.html the portal looks for at its root. */
+function entryAsIndex(): Plugin {
+  return {
+    name: "gamey-entry-as-index",
+    apply: "build",
+    closeBundle() {
+      renameSync("dist/basic.html", "dist/index.html");
+    },
+  };
+}
+
 /** Music tracks that actually ship (public/assets/music): AudioManager
     requests only these. A probe for a missing file logged a console 404 on
     every prod load (2026-10-21). */
@@ -45,7 +57,7 @@ function musicFiles(): string[] {
 
 export default defineConfig({
   base: "./",
-  plugins: [preloadGameChunks()],
+  plugins: [preloadGameChunks(), entryAsIndex()],
   define: {
     __MUSIC_FILES__: JSON.stringify(musicFiles()),
   },
