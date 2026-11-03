@@ -249,7 +249,7 @@ test.describe('Gamey - Combat', () => {
     await expect(page.locator('.shop h2')).toContainText('ARMORY');
     await expect(page.locator('[data-b="tutorial"]')).toBeVisible();
     await page.click('[data-b="back"]');
-    await expect(page.locator('.menu h1')).toContainText('HIGH NOON');
+    await expect(page.locator('.menu h1')).toContainText('DUSTBOUND');
   });
 
   test('combat run has zero console errors', async ({ page }) => {

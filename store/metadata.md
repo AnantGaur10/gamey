@@ -1,4 +1,4 @@
-# HIGH NOON DUEL: store metadata (CrazyGames Developer Portal)
+# DUSTBOUND DUEL: store metadata (CrazyGames Developer Portal)
 
 Paste-ready text for the portal. Every claim maps to code (sources in
 brackets, delete them when pasting). Covers: `store/covers/` (built by
@@ -7,7 +7,7 @@ brackets, delete them when pasting). Covers: `store/covers/` (built by
 
 ## Name
 
-HIGH NOON DUEL
+DUSTBOUND DUEL
 
 ## Genre / tags
 
@@ -16,11 +16,11 @@ Shooting, Western, Cowboy, 3D, Reflex, Duel, Singleplayer
 ## Short description
 
 A quick-draw cowboy duel. Focus your aim, draw when the cue drops and put
-your rival in the dirt before he puts you there.
+your rival in the dirt before they put you there.
 
 ## Description
 
-Six bullets, one outlaw, one street. HIGH NOON DUEL is a 3D quick-draw
+Six bullets, one outlaw, one street. DUSTBOUND DUEL is a 3D quick-draw
 showdown: keep your hand on the holster while the clock runs, steady your aim,
 and fire the moment the cue says DRAW!
 
@@ -28,13 +28,13 @@ and fire the moment the cue says DRAW!
   tighten your crosshair. Every perfect press narrows it more, every miss
   costs you time. [`src/game/timingQte.ts`, `src/ui/focus.ts`]
 - **Aim for the head.** A headshot (hat included) always kills. Body hits
-  drop your rival into a crouch or flat on his back, and he keeps shooting,
+  drop your rival into a crouch or flat on their back, and they keep shooting,
   so re-aim and finish the job. [`src/game/projectiles.ts`, `context/2026-10-21.md` §1]
 - **Pace your shots.** Every shot kicks your crosshair wide and every hit you
   take throws it wider. Spraying all six bullets rarely works.
   [`DuelMachine.applyShotKick/applyFlinch`]
 - **Noon, dusk, night.** Each decided round of a best-of-3 gets darker. At night
-  your rival vanishes into the dark and only his muzzle flash gives him away.
+  your rival vanishes into the dark and only their muzzle flash gives them away.
   [`timeOfDayForRound`, `src/render/arena.ts`]
 - **Ten gunslingers, endless stages.** Climb a ladder of ten named rivals,
   from Greenhorn Gus to The Widow, each one faster and deadlier than the

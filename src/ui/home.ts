@@ -245,7 +245,7 @@ export function showHome(root: HTMLElement, adapter: PortalAdapter, audio: Audio
     <div class="scrim"></div>
     <header class="brand">
       <span class="badge">${STAR_ICON}</span>
-      <h1><span class="t1">HIGH NOON</span><span class="t2">DUEL</span></h1>
+      <h1><span class="t1">DUSTBOUND</span><span class="t2">DUEL</span></h1>
     </header>
     <nav class="opts">
       <button class="opt primary" data-m="standard"><span class="lbl">PLAY</span><small>Stage ${pos.stage} · Level ${pos.idx + 1} of ${LEVEL_COUNT} · vs ${titleCase(ladderLevel(lv).name)}</small></button>
@@ -909,7 +909,7 @@ function runDuel(
   let loading = true;
   const loadT0 = performance.now();
   let loadingEl: HTMLElement | null = allLoaded(assetUrls) ? null : el(`<div class="boot duel-loading">
-    <div class="boot-title"><span class="t1">HIGH NOON</span><span class="t2">DUEL</span></div>
+    <div class="boot-title"><span class="t1">DUSTBOUND</span><span class="t2">DUEL</span></div>
     <div class="boot-bar det"><i></i></div>
     <small>LOADING ${mapDef.name}</small>
   </div>`);

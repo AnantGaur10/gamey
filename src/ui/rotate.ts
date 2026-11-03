@@ -18,7 +18,7 @@ export function installRotatePrompt(showCard: boolean): void {
   const mq = matchMedia("(orientation: portrait) and (pointer: coarse)");
   const card = document.createElement("div");
   card.className = "rotate-card";
-  card.innerHTML = `<div class="rc-phone">${PHONE}</div><b>ROTATE YOUR PHONE</b><small>High Noon Duel plays in landscape</small>`;
+  card.innerHTML = `<div class="rc-phone">${PHONE}</div><b>ROTATE YOUR PHONE</b><small>Dustbound Duel plays in landscape</small>`;
   const apply = (): void => {
     portrait = mq.matches;
     if (showCard) {

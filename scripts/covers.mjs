@@ -34,7 +34,7 @@ h1 { position: absolute; left: 0; right: 0; top: ${c.top * c.h}px; margin: 0; di
 .t2::before, .t2::after { content: ""; width: 2.2em; height: 0.08em; }
 .t2::before { background: linear-gradient(90deg, rgba(255, 214, 120, 0), #ffd678); }
 .t2::after { margin-left: -0.6em; background: linear-gradient(270deg, rgba(255, 214, 120, 0), #ffd678); }
-</style></head><body><h1><span class="t1">HIGH NOON</span><span class="t2">DUEL</span></h1></body></html>`;
+</style></head><body><h1><span class="t1">DUSTBOUND</span><span class="t2">DUEL</span></h1></body></html>`;
 
 const browser = await chromium.launch({ headless: true });
 for (const c of COVERS) {
